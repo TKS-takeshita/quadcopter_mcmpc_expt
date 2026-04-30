@@ -24,18 +24,18 @@
 #define _DEVICE_CONST_N_OF_BLOCK 		64
 
 // cost for MPC
-#define _COST_Q_X 		36.0f
-#define _COST_Q_Y 		36.0f
-#define _COST_Q_Z 		100.0f
-#define _COST_Q_XP 		3.0f
-#define _COST_Q_YP 		3.0f
-#define _COST_Q_ZP 		5.0f
+#define _COST_Q_X 		1.0f
+#define _COST_Q_Y 		1.0f
+#define _COST_Q_Z 		2.0f
+#define _COST_Q_XP 		10.0f
+#define _COST_Q_YP 		10.0f
+#define _COST_Q_ZP 		15.0f
 #define _COST_Q_E1 		0.01f
 #define _COST_Q_E2 		0.01f
 #define _COST_Q_E3 		0.001f
-#define _COST_Q_WX 		10.0f
-#define _COST_Q_WY 		10.0f
-#define _COST_Q_WZ 		9.0f
+#define _COST_Q_WX 		36.0f
+#define _COST_Q_WY 		36.0f
+#define _COST_Q_WZ 		10.0f
 #define _COST_Q_ZI 		0.0f
 #define _COST_R_X 		0.0001f
 #define _COST_R_Y 	    0.001f
@@ -117,11 +117,9 @@ struct CONST_PARAM
     static const double MC_ROLLRATE_I;
     static const double MC_PITCHRATE_I;
     static const double MC_YAWRATE_I;
-    static const double CA_ROTOR0_KM;
-    static const double CA_ROTOR1_KM;
-    static const double CA_ROTOR2_KM;
-    static const double CA_ROTOR3_KM;
+    static const double CA_ROTOR_KM[4];
     static const double CA_ROTOR_CT[4];
+
 
     static const double ARW_GAIN;
     

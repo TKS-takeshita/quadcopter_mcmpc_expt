@@ -253,10 +253,18 @@ namespace qc_mcmpc
             torque_ref[1] = mc_pitchrate_p*(ref_pitch - var_p_temp[5]) - mc_pitchrate_d*(prev_omega[1]-var_p_temp[5]);
             torque_ref[2] = mc_yawrate_p*(ref_yaw - var_p_temp[6])     - mc_yawrate_d*(prev_omega[2]-var_p_temp[6]);
             float allocator_ref[4];
-            for(int i=0; i<4; i++)
-                allocator_ref[i] = mix_device[i][0]*torque_ref[0]+mix_device[i][1]*torque_ref[1]+mix_device[i][2]*torque_ref[2]+mix_device[i][5]*ref_th;
-            // float ref_qw = sqrtf(fmaxf(0.0f, 1 - ref_qx*ref_qx - ref_qy*ref_qy - ref_qz*ref_qz));
+            for(int h=0; h<4; h++){
+                allocator_ref[h] = mix_device[h][0]*torque_ref[0]+mix_device[h][1]*torque_ref[1]+mix_device[h][2]*torque_ref[2]+mix_device[h][5]*ref_th/max_thrust_device;
+                allocator_ref[h] = fmaxf(0.0f, fminf(1.0f, allocator_ref[h]));
+            }
+                // float ref_qw = sqrtf(fmaxf(0.0f, 1 - ref_qx*ref_qx - ref_qy*ref_qy - ref_qz*ref_qz));
             // float sign_w = ((var_p_temp[0]*ref_qw+var_p_temp[1]*ref_qx+var_p_temp[2]*ref_qy+var_p_temp[3]*ref_qz)>=0.0f)?1.0f : -1.0f;
+            
+            float rps_ccw1 = 460.0f * allocator_ref[0] / 3.0f + 25.0f;
+            float rps_cw1  = 460.0f * allocator_ref[1] / 3.0f + 25.0f;
+            float rps_ccw2 = 460.0f * allocator_ref[2] / 3.0f + 25.0f;
+            float rps_cw2  = 460.0f * allocator_ref[3] / 3.0f + 25.0f;
+
             for ( float t = 0.0f; t < control_period_device - integration_step_size_device / 2; t += integration_step_size_device )
             {              
                 for ( int k = 0; k < _N_OF_ODES; k++ ) var_p_temp[k] = var_and_z_i_temp[k];
@@ -272,10 +280,12 @@ namespace qc_mcmpc
                 var_and_z_i_temp[1] *= q_norm_inv;
                 var_and_z_i_temp[2] *= q_norm_inv;
                 var_and_z_i_temp[3] *= q_norm_inv;
-                /* wxp */ var_and_z_i_temp[4]   = ref_roll;
-                /* wyp */ var_and_z_i_temp[5]   = ref_pitch;
-                /* wzp */ var_and_z_i_temp[6]   = ref_yaw;
-
+                // /* wxp */ var_and_z_i_temp[4]   = ref_roll;
+                // /* wyp */ var_and_z_i_temp[5]   = ref_pitch;
+                // /* wzp */ var_and_z_i_temp[6]   = ref_yaw;
+                /* wxp */ var_and_z_i_temp[4]  +=  (((i_yy_device-i_zz_device)*var_p_temp[5]*var_p_temp[6]+0.5f*_INV_SQRT_2*rotor_distance_device*max_thrust_device*(-rps_ccw1*fabsf(rps_ccw1)+rps_ccw2*fabsf(rps_ccw2)+rps_cw1*fabsf(rps_cw1)-rps_cw2*fabsf(rps_cw2))/max_rps_pow_device)/i_xx_device)*integration_step_size_device;
+                /* wyp */ var_and_z_i_temp[5]  +=  (((i_zz_device-i_xx_device)*var_p_temp[4]*var_p_temp[6]+0.5f*_INV_SQRT_2*rotor_distance_device*max_thrust_device*( rps_ccw1*fabsf(rps_ccw1)-rps_ccw2*fabsf(rps_ccw2)+rps_cw1*fabsf(rps_cw1)-rps_cw2*fabsf(rps_cw2))/max_rps_pow_device)/i_yy_device)*integration_step_size_device;
+                /* wzp */ var_and_z_i_temp[6]  +=  (((i_xx_device-i_yy_device)*var_p_temp[4]*var_p_temp[5]+0.5f*_INV_SQRT_2*rotor_distance_device*torque_rate_device*(rps_ccw1*fabsf(rps_ccw1)+rps_ccw2*fabsf(rps_ccw2)-rps_cw1*fabsf(rps_cw1)-rps_cw2*fabsf(rps_cw2)))/i_zz_device)*integration_step_size_device;
                 /* xp  */ var_and_z_i_temp[7]  +=  var_p_temp[10] * integration_step_size_device;
                 /* yp  */ var_and_z_i_temp[8]  +=  var_p_temp[11] * integration_step_size_device;
                 /* zp  */ var_and_z_i_temp[9]  +=  var_p_temp[12] * integration_step_size_device;
@@ -314,6 +324,10 @@ namespace qc_mcmpc
                  +  _COST_R_Z*decoupled_position[i][z]*decoupled_position[i][z]
                  +  _COST_R_YAW*decoupled_position[i][yaw]*decoupled_position[i][yaw]
             );
+
+            prev_omega[0] = var_p_temp[4];
+            prev_omega[1] = var_p_temp[5];
+            prev_omega[2] = var_p_temp[6];
             
             // vel_int[0] += (vel_ref[0]-var_and_z_i_temp[10]-arw_gain*(a_ref[0]-acc_produced[0]))*control_period_device;
             // vel_int[1] += (vel_ref[1]-var_and_z_i_temp[11]-arw_gain*(a_ref[1]-acc_produced[1]))*control_period_device;

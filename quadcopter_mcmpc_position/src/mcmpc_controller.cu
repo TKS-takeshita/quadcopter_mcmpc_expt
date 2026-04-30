@@ -53,6 +53,7 @@ namespace qc_mcmpc
     __constant__ float vel_int_device[3];
     __constant__ float prev_acceleration_device[3];
     __constant__ float prev_angular_velocity_device[3];
+    __constant__ float mix_device[4][6];
 
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
 	__constant__ float x_wall_device;
@@ -70,10 +71,13 @@ namespace qc_mcmpc
 	__constant__ input_array average_input_device;
 	__constant__ float sigma_k_device[4];
 
+    float prev_angular_velocity_host[3] = {0.0f, 0.0f, 0.0f};
+    float mix_host[4][6] = {0.0f};  
+
 	__global__ static void init_curand_seed(curandState *state_array, int seed);
 	__global__ static void generate_input_samples_and_calc_costs(curandState *state, input_array* input_array_sample_device, float* cost_vec);
 	__global__ static void extract_elite_sample(input_array* src, input_array* dst, int* elite_indices);
-    static bool calc_pseudo_inverse_6x4_to_4x6(const float B[6][4],float B_pinv[4][6]);
+    bool calc_pseudo_inverse_6x4_to_4x6(const float B[6][4],float B_pinv[4][6]);
 
 	// コスト再計算用関数
 	static void input_constraint_cpu(float& rps_z, float& rps_wx, float& rps_wy, float& rps_ws);
@@ -239,7 +243,7 @@ namespace qc_mcmpc
         curand_init( seed, id, 0, &state_array[id] );
     }
 
-    static bool calc_pseudo_inverse_6x4_to_4x6(const float B[6][4],float B_pinv[4][6]){
+    bool calc_pseudo_inverse_6x4_to_4x6(const float B[6][4],float B_pinv[4][6]){
        float A[4][4] = {};
 
         for(int i = 0; i < 4; i++){
@@ -432,6 +436,10 @@ namespace qc_mcmpc
         // prev_acc[0] = prev_acceleration_host[0];
         // prev_acc[1] = prev_acceleration_host[1];
         // prev_acc[2] = prev_acceleration_host[2];
+        float prev_omega[3];
+        prev_omega[0] = prev_angular_velocity_host[0];
+        prev_omega[1] = prev_angular_velocity_host[1];
+        prev_omega[2] = prev_angular_velocity_host[2];
         
         for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
         {
@@ -508,8 +516,22 @@ namespace qc_mcmpc
             best_input_array.decoupled_position[i][y] = ref_roll;
             best_input_array.decoupled_position[i][z] = ref_pitch;
             best_input_array.decoupled_position[i][yaw] = ref_yaw;
+            float torque_ref[3];
+            torque_ref[0] = CONST_PARAM_FLOAT::MC_ROLLRATE_P*(ref_roll - var_p_temp[4])   - CONST_PARAM_FLOAT::MC_ROLLRATE_D*(prev_omega[0]-var_p_temp[4]);
+            torque_ref[1] = CONST_PARAM_FLOAT::MC_PITCHRATE_P*(ref_pitch - var_p_temp[5]) - CONST_PARAM_FLOAT::MC_PITCHRATE_D*(prev_omega[1]-var_p_temp[5]);
+            torque_ref[2] = CONST_PARAM_FLOAT::MC_YAWRATE_P*(ref_yaw - var_p_temp[6])     - CONST_PARAM_FLOAT::MC_YAWRATE_D*(prev_omega[2]-var_p_temp[6]);
+            float allocator_ref[4];
+            for(int h=0; h<4; h++){
+                allocator_ref[h] = mix_host[h][0]*torque_ref[0]+mix_host[h][1]*torque_ref[1]+mix_host[h][2]*torque_ref[2]+mix_host[h][5]*ref_th/max_thrust_device;
+                allocator_ref[h] = fmaxf(0.0f, fminf(1.0f, allocator_ref[h]));
+            }
             // float ref_qw = sqrtf(fmaxf(0.0f, 1 - ref_qx*ref_qx - ref_qy*ref_qy - ref_qz*ref_qz));
             // float sign_w = ((var_p_temp[0]*ref_qw+var_p_temp[1]*ref_qx+var_p_temp[2]*ref_qy+var_p_temp[3]*ref_qz)>=0.0f)?1.0f : -1.0f;
+            float rps_ccw1 = 460.0f * allocator_ref[0] / 3.0f + 25.0f;
+            float rps_cw1  = 460.0f * allocator_ref[1] / 3.0f + 25.0f;
+            float rps_ccw2 = 460.0f * allocator_ref[2] / 3.0f + 25.0f;
+            float rps_cw2  = 460.0f * allocator_ref[3] / 3.0f + 25.0f;
+
             for ( float t = 0.0f; t < CONST_PARAM_FLOAT::CONTROL_PERIOD - CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE  / 2; t += CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE )
             {
 				for ( int k = 0; k < _N_OF_ODES; k++ ) var_p_temp[k] = var_and_z_i_temp[k];
@@ -524,10 +546,13 @@ namespace qc_mcmpc
                 var_and_z_i_temp[1] *= q_norm_inv;
                 var_and_z_i_temp[2] *= q_norm_inv;
                 var_and_z_i_temp[3] *= q_norm_inv;
-                /* wxp */ var_and_z_i_temp[4]   = ref_roll;
-                /* wyp */ var_and_z_i_temp[5]   = ref_pitch;
-                /* wzp */ var_and_z_i_temp[6]   = ref_yaw;
-
+                // /* wxp */ var_and_z_i_temp[4]   = ref_roll;
+                // /* wyp */ var_and_z_i_temp[5]   = ref_pitch;
+                // /* wzp */ var_and_z_i_temp[6]   = ref_yaw;
+                /* wxp */ var_and_z_i_temp[4]  +=  (((CONST_PARAM_FLOAT::I_YY-CONST_PARAM_FLOAT::I_ZZ)*var_p_temp[5]*var_p_temp[6]+0.5f*_INV_SQRT_2*CONST_PARAM_FLOAT::ROTOR_DISTANCE*CONST_PARAM_FLOAT::MAX_THRUST*(-rps_ccw1*fabsf(rps_ccw1)+rps_ccw2*fabsf(rps_ccw2)+rps_cw1*fabsf(rps_cw1)-rps_cw2*fabsf(rps_cw2))/CONST_PARAM_FLOAT::MAX_RPS_POW)/CONST_PARAM_FLOAT::I_XX)*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* wyp */ var_and_z_i_temp[5]  +=  (((CONST_PARAM_FLOAT::I_ZZ-CONST_PARAM_FLOAT::I_XX)*var_p_temp[4]*var_p_temp[6]+0.5f*_INV_SQRT_2*CONST_PARAM_FLOAT::ROTOR_DISTANCE*CONST_PARAM_FLOAT::MAX_THRUST*( rps_ccw1*fabsf(rps_ccw1)-rps_ccw2*fabsf(rps_ccw2)+rps_cw1*fabsf(rps_cw1)-rps_cw2*fabsf(rps_cw2))/CONST_PARAM_FLOAT::MAX_RPS_POW)/CONST_PARAM_FLOAT::I_YY)*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* wzp */ var_and_z_i_temp[6]  +=  (((CONST_PARAM_FLOAT::I_XX-CONST_PARAM_FLOAT::I_YY)*var_p_temp[4]*var_p_temp[5]+0.5f*_INV_SQRT_2*CONST_PARAM_FLOAT::ROTOR_DISTANCE*CONST_PARAM_FLOAT::MAX_THRUST*(rps_ccw1*fabsf(rps_ccw1)+rps_ccw2*fabsf(rps_ccw2)-rps_cw1*fabsf(rps_cw1)-rps_cw2*fabsf(rps_cw2)))/CONST_PARAM_FLOAT::I_ZZ)*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                
                 /* xp  */ var_and_z_i_temp[7]  +=  var_p_temp[10] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
                 /* yp  */ var_and_z_i_temp[8]  +=  var_p_temp[11] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
                 /* zp  */ var_and_z_i_temp[9]  +=  var_p_temp[12] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
@@ -567,7 +592,9 @@ namespace qc_mcmpc
                  +  _COST_R_Z*best_input_array.decoupled_position[i][z]*best_input_array.decoupled_position[i][z]
                  +  _COST_R_YAW*best_input_array.decoupled_position[i][yaw]*best_input_array.decoupled_position[i][yaw]
             );
-            
+            prev_omega[0] = var_p_temp[4];
+            prev_omega[1] = var_p_temp[5];
+            prev_omega[2] = var_p_temp[6];
             // vel_int[0] += (vel_ref[0]-var_and_z_i_temp[10]-CONST_PARAM_FLOAT::ARW_GAIN*(a_ref[0]-acc_produced[0]))*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
             // vel_int[1] += (vel_ref[1]-var_and_z_i_temp[11]-CONST_PARAM_FLOAT::ARW_GAIN*(a_ref[1]-acc_produced[1]))*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
             // vel_int[2] += (vel_ref[2]-var_and_z_i_temp[12])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;

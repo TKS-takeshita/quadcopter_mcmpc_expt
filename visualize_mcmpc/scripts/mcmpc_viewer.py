@@ -5,10 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 from matplotlib.collections import LineCollection
 
-default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260429_161843.csv"
-
-state = sys.argv[1] if len(sys.argv) > 1 else "x"
-csv_path = sys.argv[2] if len(sys.argv) > 2 else default_csv
+default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260501_011728.csv"
 
 valid_states = [
     "e0", "e1", "e2", "e3",
@@ -18,9 +15,41 @@ valid_states = [
     "input1", "input2", "input3", "input4"
 ]
 
+# =========================
+# args
+# 例:
+# python3 plot.py x
+# python3 plot.py x all
+# python3 plot.py x 1step
+# python3 plot.py x /path/log.csv
+# python3 plot.py x /path/log.csv 1step
+# =========================
+state = sys.argv[1] if len(sys.argv) > 1 else "x"
+csv_path = default_csv
+mode = "all"
+
+if len(sys.argv) > 2:
+    if sys.argv[2] in ["all", "1step"]:
+        mode = sys.argv[2]
+    else:
+        csv_path = sys.argv[2]
+
+if len(sys.argv) > 3:
+    if sys.argv[3] in ["all", "1step"]:
+        mode = sys.argv[3]
+    else:
+        print("Invalid mode:", sys.argv[3])
+        print("mode must be: all or 1step")
+        sys.exit(1)
+
 if state not in valid_states:
     print(f"Invalid state: {state}")
     print("valid:", valid_states)
+    sys.exit(1)
+
+if mode not in ["all", "1step"]:
+    print("Invalid mode:", mode)
+    print("mode must be: all or 1step")
     sys.exit(1)
 
 df = pd.read_csv(csv_path)
@@ -36,6 +65,11 @@ plt.subplots_adjust(bottom=0.25)
 # =========================
 if state.startswith("input"):
     input_col = "input_" + state[-1]
+
+    if input_col not in df.columns:
+        print(f"No input column: {input_col}")
+        sys.exit(1)
+
     ax.plot(t_cur, df[input_col].values, color="green", label=input_col)
 
     t_min = t_cur.min()
@@ -47,6 +81,10 @@ if state.startswith("input"):
 else:
     cur_col = f"cur_{state}"
 
+    if cur_col not in df.columns:
+        print(f"No current state column: {cur_col}")
+        sys.exit(1)
+
     # 現在状態：青
     ax.plot(t_cur, df[cur_col].values, color="blue", linewidth=2.0, label=cur_col)
 
@@ -57,7 +95,7 @@ else:
     h = 1
     while True:
         t_col = f"t_pred_{h}"
-        s_col = f"{h}{state}"   # 例: 1e0, 2e0, 1x, 2x
+        s_col = f"{h}{state}"
 
         if t_col not in df.columns or s_col not in df.columns:
             break
@@ -71,32 +109,56 @@ else:
         print("Expected columns like: t_pred_1, 1e0, t_pred_2, 2e0, ...")
         sys.exit(1)
 
-    # 各制御周期の予測軌道を赤系で表示
-    segments = []
-    colors = []
+    # =========================
+    # 1step表示
+    # =========================
+    if mode == "1step":
+        t_pred_col = "t_pred_1"
+        s_pred_col = f"1{state}"
 
-    n_rows = len(df)
+        if t_pred_col not in df.columns or s_pred_col not in df.columns:
+            print(f"No 1step prediction columns found: {t_pred_col}, {s_pred_col}")
+            sys.exit(1)
 
-    for i in range(n_rows):
-        xs = df.loc[i, pred_times_cols].values.astype(float)
-        ys = df.loc[i, pred_state_cols].values.astype(float)
+        ax.plot(
+            df[t_pred_col].values,
+            df[s_pred_col].values,
+            color="red",
+            linewidth=2.0,
+            label="1step prediction"
+        )
 
-        points = np.column_stack([xs, ys])
-        segments.append(points)
+        t_min = min(t_cur.min(), df[t_pred_col].min())
+        t_max = max(t_cur.max(), df[t_pred_col].max())
 
-        # 古い制御周期ほど薄い赤
-        alpha = 0.05 + 0.75 * (i / max(1, n_rows - 1))
-        colors.append((1.0, 0.0, 0.0, alpha))
+    # =========================
+    # all表示
+    # =========================
+    else:
+        segments = []
+        colors = []
 
-    lc = LineCollection(segments, colors=colors, linewidths=1.0)
-    ax.add_collection(lc)
+        n_rows = len(df)
 
-    ax.plot([], [], color="red", alpha=0.8, label="pred horizon")
+        for i in range(n_rows):
+            xs = df.loc[i, pred_times_cols].values.astype(float)
+            ys = df.loc[i, pred_state_cols].values.astype(float)
 
-    t_min = min(t_cur.min(), df[pred_times_cols].min().min())
-    t_max = max(t_cur.max(), df[pred_times_cols].max().max())
+            points = np.column_stack([xs, ys])
+            segments.append(points)
 
-ax.set_title(state)
+            alpha = 0.05 + 0.75 * (i / max(1, n_rows - 1))
+            colors.append((1.0, 0.0, 0.0, alpha))
+
+        lc = LineCollection(segments, colors=colors, linewidths=1.0)
+        ax.add_collection(lc)
+
+        ax.plot([], [], color="red", alpha=0.8, label="pred horizon")
+
+        t_min = min(t_cur.min(), df[pred_times_cols].min().min())
+        t_max = max(t_cur.max(), df[pred_times_cols].max().max())
+
+ax.set_title(f"{state} ({mode})")
 ax.set_xlabel("time [s]")
 ax.set_ylabel(state)
 ax.grid(True)

@@ -102,6 +102,8 @@ namespace qc_mcmpc{
     extern __constant__ float vel_int_device[3];
     extern __constant__ float prev_acceleration_device[3];
     extern __constant__ float prev_angular_velocity_device[3];
+    extern float prev_angular_velocity_host[3];
+    extern float mix_host[4][6];
 
     extern __constant__ float mix_device[4][6];
 
@@ -113,8 +115,7 @@ namespace qc_mcmpc{
     static float prev_velocity_host[3] = {0.0f, 0.0f, 0.0f};
     static float prev_acceleration_host[3] = {0.0f, 0.0f, 0.0f};
     static float vel_int_host[3] = {0.0f, 0.0f, 0.0f};
-
-    static float mix_host[4][6];
+    
 
     qc_mcmpc::target_state_t target{
         CONST_PARAM_FLOAT::INIT_TARGET_E0,
@@ -132,7 +133,7 @@ namespace qc_mcmpc{
         CONST_PARAM_FLOAT::INIT_TARGET_ZP
     };
 
-    extern static bool calc_pseudo_inverse_6x4_to_4x6(const float B[6][4],float B_pinv[4][6]);
+    extern bool calc_pseudo_inverse_6x4_to_4x6(const float B[6][4],float B_pinv[4][6]);
 
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
     extern __constant__ float x_wall_device;

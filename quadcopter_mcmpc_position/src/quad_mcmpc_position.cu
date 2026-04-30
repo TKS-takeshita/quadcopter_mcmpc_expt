@@ -523,6 +523,10 @@ int main(int argc, char *argv[])
         // }
         // csv保存用1stepあとの状態をシミュレーション
         verification_simulation_one_step(quad_sim_base::var_array_to_integrate, var_p_save, quad_sim_base::input1, quad_sim_base::input2, quad_sim_base::input3, quad_sim_base::input4);
+        qc_mcmpc::prev_angular_velocity_host[0] = quad_sim_base::var_array_to_integrate[4];
+        qc_mcmpc::prev_angular_velocity_host[1] = quad_sim_base::var_array_to_integrate[5];
+        qc_mcmpc::prev_angular_velocity_host[2] = quad_sim_base::var_array_to_integrate[6];
+        cudaMemcpyToSymbol(qc_mcmpc::prev_angular_velocity_device, qc_mcmpc::prev_angular_velocity_host,3*sizeof(float));
         csv << mcmpc_log;
         // 現在状態（左）
         for(int i=0;i<_N_OF_ODES;i++){
@@ -597,6 +601,10 @@ void verification_simulation_one_step(float var_and_z_i_device[], float var_p_sa
     // prev_acc[0] = prev_acceleration_host[0];
     // prev_acc[1] = prev_acceleration_host[1];
     // prev_acc[2] = prev_acceleration_host[2];
+    float prev_omega[3];
+    prev_omega[0] = qc_mcmpc::prev_angular_velocity_host[0];
+    prev_omega[1] = qc_mcmpc::prev_angular_velocity_host[1];
+    prev_omega[2] = qc_mcmpc::prev_angular_velocity_host[2];
     for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
     {
         for ( float t = 0.0f; t < CONST_PARAM_FLOAT::CONTROL_PERIOD - integration_step_size_device / 2; t += integration_step_size_device ){
@@ -673,6 +681,21 @@ void verification_simulation_one_step(float var_and_z_i_device[], float var_p_sa
             decoupled_position[y] = ref_roll;
             decoupled_position[z] = ref_pitch;
             decoupled_position[yaw] = ref_yaw;
+            float torque_ref[3];
+            torque_ref[0] = CONST_PARAM_FLOAT::MC_ROLLRATE_P*(ref_roll - var_p_temp[4])   - CONST_PARAM_FLOAT::MC_ROLLRATE_D*(prev_omega[0]-var_p_temp[4]);
+            torque_ref[1] = CONST_PARAM_FLOAT::MC_PITCHRATE_P*(ref_pitch - var_p_temp[5]) - CONST_PARAM_FLOAT::MC_PITCHRATE_D*(prev_omega[1]-var_p_temp[5]);
+            torque_ref[2] = CONST_PARAM_FLOAT::MC_YAWRATE_P*(ref_yaw - var_p_temp[6])     - CONST_PARAM_FLOAT::MC_YAWRATE_D*(prev_omega[2]-var_p_temp[6]);
+            float allocator_ref[4];
+            for(int h=0; h<4; h++){
+                allocator_ref[h] = qc_mcmpc::mix_host[h][0]*torque_ref[0]+qc_mcmpc::mix_host[h][1]*torque_ref[1]+qc_mcmpc::mix_host[h][2]*torque_ref[2]+qc_mcmpc::mix_host[h][5]*ref_th/max_thrust_device;
+                allocator_ref[h] = fmaxf(0.0f, fminf(1.0f, allocator_ref[h]));
+            }
+                // float ref_qw = sqrtf(fmaxf(0.0f, 1 - ref_qx*ref_qx - ref_qy*ref_qy - ref_qz*ref_qz));
+            // float sign_w = ((var_p_temp[0]*ref_qw+var_p_temp[1]*ref_qx+var_p_temp[2]*ref_qy+var_p_temp[3]*ref_qz)>=0.0f)?1.0f : -1.0f;
+            float rps_ccw1 = 460.0f * allocator_ref[0] / 3.0f + 25.0f;
+            float rps_cw1  = 460.0f * allocator_ref[1] / 3.0f + 25.0f;
+            float rps_ccw2 = 460.0f * allocator_ref[2] / 3.0f + 25.0f;
+            float rps_cw2  = 460.0f * allocator_ref[3] / 3.0f + 25.0f;
             for ( int k = 0; k < _N_OF_ODES; k++ ) var_p_temp[k] = var_p_save[i][k];
             // PIDカスケード用修正
             // float ref_qw = sqrtf(fmaxf(0.0f, 1 - ref_qx*ref_qx - ref_qy*ref_qy - ref_qz*ref_qz));
@@ -691,9 +714,12 @@ void verification_simulation_one_step(float var_and_z_i_device[], float var_p_sa
             // /* wxp */ var_p_save[i][4]  = 2.0f*mc_roll_p *sign_w*(var_p_temp[0]*ref_qx-var_p_temp[1]*ref_qw-var_p_temp[2]*ref_qz+var_p_temp[3]*ref_qy);
             // /* wyp */ var_p_save[i][5]  = 2.0f*mc_pitch_p*sign_w*(var_p_temp[0]*ref_qy+var_p_temp[1]*ref_qz-var_p_temp[2]*ref_qw-var_p_temp[3]*ref_qx);
             // /* wzp */ var_p_save[i][6]  = 2.0f*mc_yaw_p*  sign_w*(var_p_temp[0]*ref_qz-var_p_temp[1]*ref_qy+var_p_temp[2]*ref_qx-var_p_temp[3]*ref_qw);
-                    var_p_save[i+1][4] = ref_roll;
-                    var_p_save[i+1][5] = ref_pitch;
-                    var_p_save[i+1][6] = ref_yaw;
+                    // var_p_save[i+1][4] = ref_roll;
+                    // var_p_save[i+1][5] = ref_pitch;
+                    // var_p_save[i+1][6] = ref_yaw;
+                    var_p_save[i+1][4] += (((CONST_PARAM_FLOAT::I_YY-CONST_PARAM_FLOAT::I_ZZ)*var_p_temp[5]*var_p_temp[6]+0.5f*_INV_SQRT_2*CONST_PARAM_FLOAT::ROTOR_DISTANCE*CONST_PARAM_FLOAT::MAX_THRUST*(-rps_ccw1*fabsf(rps_ccw1)+rps_ccw2*fabsf(rps_ccw2)+rps_cw1*fabsf(rps_cw1)-rps_cw2*fabsf(rps_cw2))/CONST_PARAM_FLOAT::MAX_RPS_POW)/CONST_PARAM_FLOAT::I_XX)*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                    var_p_save[i+1][5] += (((CONST_PARAM_FLOAT::I_ZZ-CONST_PARAM_FLOAT::I_XX)*var_p_temp[4]*var_p_temp[6]+0.5f*_INV_SQRT_2*CONST_PARAM_FLOAT::ROTOR_DISTANCE*CONST_PARAM_FLOAT::MAX_THRUST*( rps_ccw1*fabsf(rps_ccw1)-rps_ccw2*fabsf(rps_ccw2)+rps_cw1*fabsf(rps_cw1)-rps_cw2*fabsf(rps_cw2))/CONST_PARAM_FLOAT::MAX_RPS_POW)/CONST_PARAM_FLOAT::I_YY)*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                    var_p_save[i+1][6] += (((CONST_PARAM_FLOAT::I_XX-CONST_PARAM_FLOAT::I_YY)*var_p_temp[4]*var_p_temp[5]+0.5f*_INV_SQRT_2*CONST_PARAM_FLOAT::ROTOR_DISTANCE*CONST_PARAM_FLOAT::MAX_THRUST*(rps_ccw1*fabsf(rps_ccw1)+rps_ccw2*fabsf(rps_ccw2)-rps_cw1*fabsf(rps_cw1)-rps_cw2*fabsf(rps_cw2)))/CONST_PARAM_FLOAT::I_ZZ)*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
 
             /* xp  */ var_p_save[i+1][7]  = var_p_temp[7] + var_p_temp[10] * integration_step_size_device;
             /* yp  */ var_p_save[i+1][8]  = var_p_temp[8] + var_p_temp[11] * integration_step_size_device;
