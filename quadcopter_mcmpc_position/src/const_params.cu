@@ -17,6 +17,8 @@ const double CONST_PARAM::MAX_RPS_POW     = CONST_PARAM::MAX_RPS * CONST_PARAM::
 const double CONST_PARAM::MAX_THRUST      = 53.6;      // N
 const double CONST_PARAM::TORQUE_RATE     = 0.19 / CONST_PARAM::MAX_RPS / CONST_PARAM::MAX_RPS;      // N・m
 
+const double CONST_PARAM::INIT_U_THRUST   = 0.0;
+
 const double CONST_PARAM::INIT_TARGET_E0  = 1.0;
 const double CONST_PARAM::INIT_TARGET_E1  = 0.0;
 const double CONST_PARAM::INIT_TARGET_E2  = 0.0;
@@ -31,7 +33,7 @@ const double CONST_PARAM::INIT_TARGET_XP  = 0.0;
 const double CONST_PARAM::INIT_TARGET_YP  = 0.0;
 const double CONST_PARAM::INIT_TARGET_ZP  = 0.0;
 
-const double CONST_PARAM::CONTROL_PERIOD      = 0.02;   // s
+const double CONST_PARAM::CONTROL_PERIOD      = 0.05;   // s
 const int    CONST_PARAM::N_OF_SAMPLES        = _DEVICE_CONST_THREAD_PER_BLOCK * _DEVICE_CONST_N_OF_BLOCK;
 const int    CONST_PARAM::N_OF_THE_USING_BEST = 100;
 const int    CONST_PARAM::ITERATION_TIMES     = 2;
@@ -52,9 +54,20 @@ const double CONST_PARAM::U_LOWER_LIM         = CONST_PARAM::U_G - CONST_PARAM::
     const double CONST_PARAM::MC_ROLL_P        = 4.00;
     const double CONST_PARAM::MC_PITCH_P       = 4.00;
     const double CONST_PARAM::MC_YAW_P         = 2.80;
-    const double CONST_PARAM::MPC_THR_HOVER    = 0.65;// [%]
+    const double CONST_PARAM::MPC_THR_HOVER    = 0.43 * CONST_PARAM::MAX_THRUST;// [N]
     const double CONST_PARAM::MPC_VEL_LP       = 0.0;// velocity derivative low pass cutoff frequency[Hz]
     const double CONST_PARAM::MPC_VELD_LP      = 5.0;// velocity derivative low pass cutoff frequency[Hz]
+    const double CONST_PARAM::MC_ROLLRATE_P    = 0.15;
+    const double CONST_PARAM::MC_PITCHRATE_P   = 0.15;
+    const double CONST_PARAM::MC_YAWRATE_P     = 0.20;
+    const double CONST_PARAM::MC_ROLLRATE_D    = 0.0030;
+    const double CONST_PARAM::MC_PITCHRATE_D   = 0.0030;
+    const double CONST_PARAM::MC_YAWRATE_D     = 0.00;
+    const double CONST_PARAM::MC_ROLLRATE_I    = 0.00;
+    const double CONST_PARAM::MC_PITCHRATE_I   = 0.00;
+    const double CONST_PARAM::MC_YAWRATE_I     = 0.00;
+    const double CONST_PARAM::CA_ROTOR_KM[4]     = {0.05, 0.05, -0.05, -0.05}; // N・m・s^2
+    const double CONST_PARAM::CA_ROTOR_CT[4]     = {6.5, 6.5, 6.5, 6.5}; // N・s^2
 #else
     const double CONST_PARAM::MPC_XY_P         = 0.95;
     const double CONST_PARAM::MPC_Z_P          = 1.00;
@@ -68,9 +81,20 @@ const double CONST_PARAM::U_LOWER_LIM         = CONST_PARAM::U_G - CONST_PARAM::
     const double CONST_PARAM::MC_ROLL_P        = 6.50;
     const double CONST_PARAM::MC_PITCH_P       = 6.50;
     const double CONST_PARAM::MC_YAW_P         = 2.80;
-    const double CONST_PARAM::MPC_THR_HOVER    = 0.65;// rate [%]
+    const double CONST_PARAM::MPC_THR_HOVER    = 0.65 *  CONST_PARAM::MAX_THRUST;// [N]
     const double CONST_PARAM::MPC_VEL_LP       = 0.0;// velocity derivative low pass cutoff frequency[Hz]
     const double CONST_PARAM::MPC_VELD_LP      = 5.0;// velocity derivative low pass cutoff frequency[Hz]
+    const double CONST_PARAM::MC_ROLLRATE_P    = 0.15;
+    const double CONST_PARAM::MC_PITCHRATE_P   = 0.15;
+    const double CONST_PARAM::MC_YAWRATE_P     = 0.20;
+    const double CONST_PARAM::MC_ROLLRATE_D    = 0.0030;
+    const double CONST_PARAM::MC_PITCHRATE_D   = 0.0030;
+    const double CONST_PARAM::MC_YAWRATE_D     = 0.00;
+    const double CONST_PARAM::MC_ROLLRATE_I    = 0.00;
+    const double CONST_PARAM::MC_PITCHRATE_I   = 0.00;
+    const double CONST_PARAM::MC_YAWRATE_I     = 0.00;
+    const double CONST_PARAM::CA_ROTOR_KM[4]     = {0.05, 0.05, -0.05, -0.05}; // N・m・s^2
+    const double CONST_PARAM::CA_ROTOR_CT[4]     = {6.5, 6.5, 6.5, 6.5}; // N・s^2
 #endif
 
 const double CONST_PARAM::LPF              = (2*M_PI*CONST_PARAM::MPC_VELD_LP)/(1+2*M_PI*CONST_PARAM::MPC_VELD_LP);
@@ -176,6 +200,17 @@ const float CONST_PARAM_FLOAT::MC_YAW_P         = (float)CONST_PARAM::MC_YAW_P;
 const float CONST_PARAM_FLOAT::MPC_THR_HOVER    = (float)CONST_PARAM::MPC_THR_HOVER;// rate [%]
 const float CONST_PARAM_FLOAT::MPC_VEL_LP       = (float)CONST_PARAM::MPC_VEL_LP;// velocity derivative low pass cutoff frequency[Hz]
 const float CONST_PARAM_FLOAT::MPC_VELD_LP      = (float)CONST_PARAM::MPC_VELD_LP;// velocity derivative low pass cutoff frequency[Hz]
+const float CONST_PARAM_FLOAT::MC_ROLLRATE_P    = (float)CONST_PARAM::MC_ROLLRATE_P;
+const float CONST_PARAM_FLOAT::MC_PITCHRATE_P   = (float)CONST_PARAM::MC_PITCHRATE_P;
+const float CONST_PARAM_FLOAT::MC_YAWRATE_P     = (float)CONST_PARAM::MC_YAWRATE_P;
+const float CONST_PARAM_FLOAT::MC_ROLLRATE_D    = (float)CONST_PARAM::MC_ROLLRATE_D;
+const float CONST_PARAM_FLOAT::MC_PITCHRATE_D   = (float)CONST_PARAM::MC_PITCHRATE_D;
+const float CONST_PARAM_FLOAT::MC_YAWRATE_D     = (float)CONST_PARAM::MC_YAWRATE_D;
+const float CONST_PARAM_FLOAT::MC_ROLLRATE_I    = (float)CONST_PARAM::MC_ROLLRATE_I;
+const float CONST_PARAM_FLOAT::MC_PITCHRATE_I   = (float)CONST_PARAM::MC_PITCHRATE_I;
+const float CONST_PARAM_FLOAT::MC_YAWRATE_I     = (float)CONST_PARAM::MC_YAWRATE_I;
+const float CONST_PARAM_FLOAT::CA_ROTOR_KM[4]   = {(float)CONST_PARAM::CA_ROTOR_KM[0], (float)CONST_PARAM::CA_ROTOR_KM[1], (float)CONST_PARAM::CA_ROTOR_KM[2], (float)CONST_PARAM::CA_ROTOR_KM[3]}; // N・m・s^2
+const float CONST_PARAM_FLOAT::CA_ROTOR_CT[4]   = {(float)CONST_PARAM::CA_ROTOR_CT[0], (float)CONST_PARAM::CA_ROTOR_CT[1], (float)CONST_PARAM::CA_ROTOR_CT[2], (float)CONST_PARAM::CA_ROTOR_CT[3]}; // N・s^2
 
 const float CONST_PARAM_FLOAT::LPF              = (float)CONST_PARAM::LPF;
 const float CONST_PARAM_FLOAT::ARW_GAIN         = (float)CONST_PARAM::ARW_GAIN;
@@ -192,7 +227,7 @@ const float CONST_PARAM_FLOAT::COEFF_OF_REST        = (float)CONST_PARAM::COEFF_
 const float CONST_PARAM_FLOAT::CONTROL_PERIOD        = (float)CONST_PARAM::CONTROL_PERIOD;
 const float CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE = (float)CONST_PARAM::CONTROL_PERIOD / 2.0f;   // Set it to the 1/N value of CONTROL_PERIOD 
 
-const float CONST_PARAM_FLOAT::SIGMA_CONST[4] = {2.0f, 0.1f, 0.1f, 0.1f};
+const float CONST_PARAM_FLOAT::SIGMA_CONST[4] = {2.0f, 0.01f, 0.01f, 0.01f};
 
 #ifdef MCMPC_WITH_FORCE_STATE
     const float CONST_PARAM_FLOAT::INIT_TARGET_FX  = (float)CONST_PARAM::INIT_TARGET_FX;

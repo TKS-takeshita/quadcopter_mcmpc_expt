@@ -166,6 +166,10 @@ namespace qc_mcmpc
         // prev_acc[0] = prev_acceleration_device[0];
         // prev_acc[1] = prev_acceleration_device[1];
         // prev_acc[2] = prev_acceleration_device[2];
+        float prev_omega[3];
+        prev_omega[0] = prev_angular_velocity_device[0];
+        prev_omega[1] = prev_angular_velocity_device[1];
+        prev_omega[2] = prev_angular_velocity_device[2];
         // オイラー積分とコスト評価
         for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
         {
@@ -175,7 +179,6 @@ namespace qc_mcmpc
             // float z_ref   = decoupled_position[i][z];
             // float yaw_ref = decoupled_position[i][yaw];
             float inv_mass = 1.0f / mass_of_machine_device;
-            for ( int k = 0; k < _N_OF_ODES; k++ ) var_p_temp[k] = var_and_z_i_temp[k];
             // /*目標速度*/
             // float vel_ref[3];
             // vel_ref[0] = mpc_xy_p * (x_ref - var_p_temp[7]);
@@ -238,17 +241,25 @@ namespace qc_mcmpc
             // float q_sign    = ((var_p_temp[0]*q_ref[0]+var_p_temp[1]*q_ref[1]+var_p_temp[2]*q_ref[2]+var_p_temp[3]*q_ref[3])>=0.0f)?1.0f : -1.0f;
             
             float ref_th = fmaxf(0.0f, fminf(max_thrust_device, decoupled_position[i][x]));//th
-            float ref_qx = fmaxf(-1.0f, fminf(1.0f, decoupled_position[i][y]));
-            float ref_qy = fmaxf(-1.0f, fminf(1.0f, decoupled_position[i][z]));
-            float ref_qz = fmaxf(-1.0f, fminf(1.0f, decoupled_position[i][yaw]));
+            float ref_roll = fmaxf(-1.0f, fminf(1.0f, decoupled_position[i][y]));
+            float ref_pitch = fmaxf(-1.0f, fminf(1.0f, decoupled_position[i][z]));
+            float ref_yaw = fmaxf(-1.0f, fminf(1.0f, decoupled_position[i][yaw]));
             decoupled_position[i][x]  = ref_th;
-            decoupled_position[i][y] = ref_qx;
-            decoupled_position[i][z] = ref_qy;
-            decoupled_position[i][yaw] = ref_qz;
-            float ref_qw = sqrtf(fmaxf(0.0f, 1 - ref_qx*ref_qx - ref_qy*ref_qy - ref_qz*ref_qz));
-            float sign_w = ((var_p_temp[0]*ref_qw+var_p_temp[1]*ref_qx+var_p_temp[2]*ref_qy+var_p_temp[3]*ref_qz)>=0.0f)?1.0f : -1.0f;
+            decoupled_position[i][y] = ref_roll;
+            decoupled_position[i][z] = ref_pitch;
+            decoupled_position[i][yaw] = ref_yaw;
+            float torque_ref[3];
+            torque_ref[0] = mc_rollrate_p*(ref_roll - var_p_temp[4])   - mc_rollrate_d*(prev_omega[0]-var_p_temp[4]);
+            torque_ref[1] = mc_pitchrate_p*(ref_pitch - var_p_temp[5]) - mc_pitchrate_d*(prev_omega[1]-var_p_temp[5]);
+            torque_ref[2] = mc_yawrate_p*(ref_yaw - var_p_temp[6])     - mc_yawrate_d*(prev_omega[2]-var_p_temp[6]);
+            float allocator_ref[4];
+            for(int i=0; i<4; i++)
+                allocator_ref[i] = mix_device[i][0]*torque_ref[0]+mix_device[i][1]*torque_ref[1]+mix_device[i][2]*torque_ref[2]+mix_device[i][5]*ref_th;
+            // float ref_qw = sqrtf(fmaxf(0.0f, 1 - ref_qx*ref_qx - ref_qy*ref_qy - ref_qz*ref_qz));
+            // float sign_w = ((var_p_temp[0]*ref_qw+var_p_temp[1]*ref_qx+var_p_temp[2]*ref_qy+var_p_temp[3]*ref_qz)>=0.0f)?1.0f : -1.0f;
             for ( float t = 0.0f; t < control_period_device - integration_step_size_device / 2; t += integration_step_size_device )
-            {               
+            {              
+                for ( int k = 0; k < _N_OF_ODES; k++ ) var_p_temp[k] = var_and_z_i_temp[k];
                 // PIDカスケード用修正
                 
                 /* e0p */ var_and_z_i_temp[0]  += (-0.5f*var_p_temp[1]*var_p_temp[4] - 0.5f*var_p_temp[2]*var_p_temp[5] - 0.5f*var_p_temp[3]*var_p_temp[6])*integration_step_size_device;
@@ -261,9 +272,9 @@ namespace qc_mcmpc
                 var_and_z_i_temp[1] *= q_norm_inv;
                 var_and_z_i_temp[2] *= q_norm_inv;
                 var_and_z_i_temp[3] *= q_norm_inv;
-                /* wxp */ var_and_z_i_temp[4]   = 2.0f*mc_roll_p* sign_w*(var_p_temp[0]*ref_qx-var_p_temp[1]*ref_qw-var_p_temp[2]*ref_qz+var_p_temp[3]*ref_qy);
-                /* wyp */ var_and_z_i_temp[5]   = 2.0f*mc_pitch_p*sign_w*(var_p_temp[0]*ref_qy+var_p_temp[1]*ref_qz-var_p_temp[2]*ref_qw-var_p_temp[3]*ref_qx);
-                /* wzp */ var_and_z_i_temp[6]   = 2.0f*mc_yaw_p*  sign_w*(var_p_temp[0]*ref_qz-var_p_temp[1]*ref_qy+var_p_temp[2]*ref_qx-var_p_temp[3]*ref_qw);
+                /* wxp */ var_and_z_i_temp[4]   = ref_roll;
+                /* wyp */ var_and_z_i_temp[5]   = ref_pitch;
+                /* wzp */ var_and_z_i_temp[6]   = ref_yaw;
 
                 /* xp  */ var_and_z_i_temp[7]  +=  var_p_temp[10] * integration_step_size_device;
                 /* yp  */ var_and_z_i_temp[8]  +=  var_p_temp[11] * integration_step_size_device;
@@ -298,7 +309,7 @@ namespace qc_mcmpc
                  +  _COST_Q_E1*(var_and_z_i_temp[1] -target_state_device.e1)*(var_and_z_i_temp[1] -target_state_device.e1)+ _COST_Q_E2*(var_and_z_i_temp[2] -target_state_device.e2)*(var_and_z_i_temp[2] -target_state_device.e2)+ _COST_Q_E3*(var_and_z_i_temp[3] -target_state_device.e3)*(var_and_z_i_temp[3] -target_state_device.e3)         // e1, e2, e3
                  +  _COST_Q_WX*(var_and_z_i_temp[4] -target_state_device.wx)*(var_and_z_i_temp[4] -target_state_device.wx)+ _COST_Q_WY*(var_and_z_i_temp[5] -target_state_device.wy)*(var_and_z_i_temp[5] -target_state_device.wy)+ _COST_Q_WZ*(var_and_z_i_temp[6] -target_state_device.wz)*(var_and_z_i_temp[6] -target_state_device.wz)          // wx, wy, wz
                  +  _COST_Q_ZI*var_and_z_i_temp[_N_OF_ODES]*var_and_z_i_temp[_N_OF_ODES]                                                                                                  // z_i
-                 +  _COST_R_X*(decoupled_position[i][x]-mpc_thr_hover)*(decoupled_position[i][x]-mpc_thr_hover)
+                 +  _COST_R_X*(decoupled_position[i][x])*(decoupled_position[i][x])
                  +  _COST_R_Y*decoupled_position[i][y]*decoupled_position[i][y]
                  +  _COST_R_Z*decoupled_position[i][z]*decoupled_position[i][z]
                  +  _COST_R_YAW*decoupled_position[i][yaw]*decoupled_position[i][yaw]

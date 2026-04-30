@@ -24,14 +24,14 @@
 #define _DEVICE_CONST_N_OF_BLOCK 		64
 
 // cost for MPC
-#define _COST_Q_X 		15.0f
-#define _COST_Q_Y 		15.0f
-#define _COST_Q_Z 		25.0f
+#define _COST_Q_X 		36.0f
+#define _COST_Q_Y 		36.0f
+#define _COST_Q_Z 		100.0f
 #define _COST_Q_XP 		3.0f
 #define _COST_Q_YP 		3.0f
 #define _COST_Q_ZP 		5.0f
-#define _COST_Q_E1 		0.001f
-#define _COST_Q_E2 		0.001f
+#define _COST_Q_E1 		0.01f
+#define _COST_Q_E2 		0.01f
 #define _COST_Q_E3 		0.001f
 #define _COST_Q_WX 		10.0f
 #define _COST_Q_WY 		10.0f
@@ -108,6 +108,20 @@ struct CONST_PARAM
     static const double MPC_THR_HOVER;
     static const double MPC_VEL_LP;
     static const double MPC_VELD_LP;
+    static const double MC_ROLLRATE_P;
+    static const double MC_PITCHRATE_P;
+    static const double MC_YAWRATE_P;
+    static const double MC_ROLLRATE_D;
+    static const double MC_PITCHRATE_D;
+    static const double MC_YAWRATE_D;
+    static const double MC_ROLLRATE_I;
+    static const double MC_PITCHRATE_I;
+    static const double MC_YAWRATE_I;
+    static const double CA_ROTOR0_KM;
+    static const double CA_ROTOR1_KM;
+    static const double CA_ROTOR2_KM;
+    static const double CA_ROTOR3_KM;
+    static const double CA_ROTOR_CT[4];
 
     static const double ARW_GAIN;
     
@@ -185,6 +199,17 @@ struct CONST_PARAM_FLOAT
     static const float MPC_THR_HOVER;
     static const float MPC_VEL_LP;
     static const float MPC_VELD_LP;
+    static const float MC_ROLLRATE_P;
+    static const float MC_PITCHRATE_P;
+    static const float MC_YAWRATE_P;
+    static const float MC_ROLLRATE_D;
+    static const float MC_PITCHRATE_D;
+    static const float MC_YAWRATE_D;
+    static const float MC_ROLLRATE_I;
+    static const float MC_PITCHRATE_I;
+    static const float MC_YAWRATE_I;
+    static const float CA_ROTOR_KM[4];
+    static const float CA_ROTOR_CT[4];
 
     static const float ARW_GAIN;
     
