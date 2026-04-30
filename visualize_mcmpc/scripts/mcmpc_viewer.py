@@ -5,59 +5,73 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 from matplotlib.collections import LineCollection
 
-default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260429_161843.csv"
-
-state = sys.argv[1] if len(sys.argv) > 1 else "x"
-csv_path = sys.argv[2] if len(sys.argv) > 2 else default_csv
+default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260501_083344.csv"
 
 valid_states = [
-    "e0", "e1", "e2", "e3",
-    "wx", "wy", "wz",
-    "x", "y", "z",
-    "vx", "vy", "vz",
-    "input1", "input2", "input3", "input4"
+    "e0","e1","e2","e3",
+    "wx","wy","wz",
+    "x","y","z",
+    "vx","vy","vz",
+    "input1","input2","input3","input4",
+    "target_x","target_y","target_z",
+    "cost"
 ]
 
-if state not in valid_states:
-    print(f"Invalid state: {state}")
-    print("valid:", valid_states)
-    sys.exit(1)
+state = sys.argv[1] if len(sys.argv) > 1 else "x"
+csv_path = default_csv
+mode = "all"
+
+if len(sys.argv) > 2:
+    if sys.argv[2] in ["all","1step"]:
+        mode = sys.argv[2]
+    else:
+        csv_path = sys.argv[2]
+
+if len(sys.argv) > 3:
+    if sys.argv[3] in ["all","1step"]:
+        mode = sys.argv[3]
 
 df = pd.read_csv(csv_path)
 df.columns = df.columns.str.strip()
 
 t_cur = df["t"].values
 
-fig, ax = plt.subplots(figsize=(12, 5))
-plt.subplots_adjust(bottom=0.25)
+fig, ax = plt.subplots(figsize=(12,5))
+plt.subplots_adjust(bottom=0.25, right=0.88)
 
 # =========================
-# input表示
+# input
 # =========================
 if state.startswith("input"):
-    input_col = "input_" + state[-1]
-    ax.plot(t_cur, df[input_col].values, color="green", label=input_col)
-
-    t_min = t_cur.min()
-    t_max = t_cur.max()
+    col = "input_" + state[-1]
+    ax.plot(t_cur, df[col], color="green", label=col)
 
 # =========================
-# 状態表示
+# target
+# =========================
+elif state.startswith("target"):
+    ax.plot(t_cur, df[state], color="orange", linewidth=2, label=state)
+
+# =========================
+# cost
+# =========================
+elif state == "cost":
+    ax.plot(t_cur, df["cost"], color="purple", linewidth=2, label="cost")
+
+# =========================
+# state
 # =========================
 else:
     cur_col = f"cur_{state}"
+    ax.plot(t_cur, df[cur_col], color="blue", linewidth=2, label=cur_col)
 
-    # 現在状態：青
-    ax.plot(t_cur, df[cur_col].values, color="blue", linewidth=2.0, label=cur_col)
-
-    # horizon列を自動検出
     pred_times_cols = []
     pred_state_cols = []
 
     h = 1
     while True:
         t_col = f"t_pred_{h}"
-        s_col = f"{h}{state}"   # 例: 1e0, 2e0, 1x, 2x
+        s_col = f"{h}{state}"
 
         if t_col not in df.columns or s_col not in df.columns:
             break
@@ -66,110 +80,93 @@ else:
         pred_state_cols.append(s_col)
         h += 1
 
-    if len(pred_times_cols) == 0:
-        print("No horizon prediction columns found.")
-        print("Expected columns like: t_pred_1, 1e0, t_pred_2, 2e0, ...")
-        sys.exit(1)
+    if len(pred_times_cols) > 0:
 
-    # 各制御周期の予測軌道を赤系で表示
-    segments = []
-    colors = []
+        if mode == "1step":
+            ax.plot(df["t_pred_1"], df[f"1{state}"],
+                    color="red", linewidth=2, label="1step")
 
-    n_rows = len(df)
+        else:
+            segments = []
+            colors = []
 
-    for i in range(n_rows):
-        xs = df.loc[i, pred_times_cols].values.astype(float)
-        ys = df.loc[i, pred_state_cols].values.astype(float)
+            for i in range(len(df)):
+                xs = np.concatenate(([df.loc[i,"t"]],
+                                     df.loc[i,pred_times_cols].values))
+                ys = np.concatenate(([df.loc[i,cur_col]],
+                                     df.loc[i,pred_state_cols].values))
 
-        points = np.column_stack([xs, ys])
-        segments.append(points)
+                segments.append(np.column_stack([xs,ys]))
+                alpha = 0.05 + 0.75*(i/max(1,len(df)-1))
+                colors.append((1,0,0,alpha))
 
-        # 古い制御周期ほど薄い赤
-        alpha = 0.05 + 0.75 * (i / max(1, n_rows - 1))
-        colors.append((1.0, 0.0, 0.0, alpha))
+            lc = LineCollection(segments, colors=colors, linewidths=1.0)
+            ax.add_collection(lc)
 
-    lc = LineCollection(segments, colors=colors, linewidths=1.0)
-    ax.add_collection(lc)
+            ax.plot([],[],color="red",label="pred")
 
-    ax.plot([], [], color="red", alpha=0.8, label="pred horizon")
-
-    t_min = min(t_cur.min(), df[pred_times_cols].min().min())
-    t_max = max(t_cur.max(), df[pred_times_cols].max().max())
+t_min = t_cur.min()
+t_max = t_cur.max()
 
 ax.set_title(state)
-ax.set_xlabel("time [s]")
-ax.set_ylabel(state)
-ax.grid(True)
+ax.set_xlabel("time")
+ax.grid()
 ax.legend()
 
-# autoscale
 ax.relim()
 ax.autoscale_view()
 
+# =========================
+# 横スライダ
+# =========================
 init_width = min(2.0, t_max - t_min)
 window_width = [init_width]
 
-slider_ax = plt.axes([0.15, 0.1, 0.7, 0.03])
-time_slider = Slider(
-    slider_ax,
-    "time",
-    t_min,
-    t_max,
-    valinit=t_min + init_width / 2
-)
+slider_ax = plt.axes([0.15,0.1,0.7,0.03])
+time_slider = Slider(slider_ax,"time",t_min,t_max,
+                     valinit=t_min + init_width/2)
+
+# =========================
+# 縦スライダ
+# =========================
+ymin, ymax = ax.get_ylim()
+y_height = [ymax - ymin]
+
+y_slider_ax = plt.axes([0.91,0.2,0.02,0.65])
+y_slider = Slider(y_slider_ax,"y",ymin,ymax,
+                  valinit=0.5*(ymin+ymax),
+                  orientation="vertical")
 
 def set_xlim(center):
-    half = window_width[0] / 2
-    left = max(t_min, center - half)
-    right = min(t_max, center + half)
-
-    if right - left < window_width[0]:
-        if left <= t_min:
-            right = min(t_max, t_min + window_width[0])
-        if right >= t_max:
-            left = max(t_min, t_max - window_width[0])
-
-    ax.set_xlim(left, right)
+    half = window_width[0]/2
+    ax.set_xlim(center-half, center+half)
     fig.canvas.draw_idle()
 
-def zoom_ylim(scale):
-    y_min, y_max = ax.get_ylim()
-    center = 0.5 * (y_min + y_max)
-    half = 0.5 * (y_max - y_min) * scale
-
-    ax.set_ylim(center - half, center + half)
+def set_ylim(center):
+    half = y_height[0]/2
+    ax.set_ylim(center-half, center+half)
     fig.canvas.draw_idle()
-
-def on_slider(val):
-    set_xlim(val)
 
 def on_scroll(event):
     if event.inaxes != ax:
         return
 
-    # Shift + scroll：縦軸ズーム
     if event.key == "shift":
-        if event.button == "up":
-            zoom_ylim(0.8)
-        elif event.button == "down":
-            zoom_ylim(1.25)
+        scale = 0.8 if event.button=="up" else 1.25
+        y_height[0] *= scale
+        set_ylim(y_slider.val)
         return
 
-    # 通常scroll：横軸ズーム
-    cur_xlim = ax.get_xlim()
-    width = cur_xlim[1] - cur_xlim[0]
-
-    if event.button == "up":
-        width *= 0.8
-    elif event.button == "down":
-        width *= 1.25
-
-    width = max(0.02, min(width, t_max - t_min))
-    window_width[0] = width
+    scale = 0.8 if event.button=="up" else 1.25
+    window_width[0] *= scale
     set_xlim(time_slider.val)
 
-time_slider.on_changed(on_slider)
+time_slider.on_changed(lambda v:set_xlim(v))
+y_slider.on_changed(lambda v:set_ylim(v))
+
 fig.canvas.mpl_connect("scroll_event", on_scroll)
 
 set_xlim(time_slider.val)
+set_ylim(y_slider.val)
+
 plt.show()

@@ -15,7 +15,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 install(PROGRAMS
-  scripts/mcmpc_replay.py
+  scripts/mcmpc_viewer.py
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch rviz

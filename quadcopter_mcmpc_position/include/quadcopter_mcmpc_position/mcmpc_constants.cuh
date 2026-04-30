@@ -103,8 +103,6 @@ namespace qc_mcmpc{
     extern __constant__ float prev_acceleration_device[3];
     extern __constant__ float prev_angular_velocity_device[3];
 
-    extern __constant__ float mix_device[4][6];
-
     // __constant__ GPUのconstantメモリ（各制御周期ごとにCPUから更新）
     extern __constant__ float var_and_z_i_device[_N_OF_ODES + 1];
     extern __constant__ input_array average_input_device;
@@ -114,9 +112,8 @@ namespace qc_mcmpc{
     static float prev_acceleration_host[3] = {0.0f, 0.0f, 0.0f};
     static float vel_int_host[3] = {0.0f, 0.0f, 0.0f};
 
-    static float mix_host[4][6];
 
-    qc_mcmpc::target_state_t target{
+    qc_mcmpc::target_state_t target_host{
         CONST_PARAM_FLOAT::INIT_TARGET_E0,
         CONST_PARAM_FLOAT::INIT_TARGET_E1,
         CONST_PARAM_FLOAT::INIT_TARGET_E2,
@@ -131,8 +128,6 @@ namespace qc_mcmpc{
         CONST_PARAM_FLOAT::INIT_TARGET_YP,
         CONST_PARAM_FLOAT::INIT_TARGET_ZP
     };
-
-    extern static bool calc_pseudo_inverse_6x4_to_4x6(const float B[6][4],float B_pinv[4][6]);
 
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
     extern __constant__ float x_wall_device;

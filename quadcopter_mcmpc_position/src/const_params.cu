@@ -26,7 +26,7 @@ const double CONST_PARAM::INIT_TARGET_E3  = 0.0;
 const double CONST_PARAM::INIT_TARGET_WX  = 0.0;
 const double CONST_PARAM::INIT_TARGET_WY  = 0.0;
 const double CONST_PARAM::INIT_TARGET_WZ  = 0.0;
-const double CONST_PARAM::INIT_TARGET_X   = 0.0;
+const double CONST_PARAM::INIT_TARGET_X   = 1.0;
 const double CONST_PARAM::INIT_TARGET_Y   = 0.0;
 const double CONST_PARAM::INIT_TARGET_Z   = -1.2;
 const double CONST_PARAM::INIT_TARGET_XP  = 0.0;
@@ -35,7 +35,7 @@ const double CONST_PARAM::INIT_TARGET_ZP  = 0.0;
 
 const double CONST_PARAM::CONTROL_PERIOD      = 0.05;   // s
 const int    CONST_PARAM::N_OF_SAMPLES        = _DEVICE_CONST_THREAD_PER_BLOCK * _DEVICE_CONST_N_OF_BLOCK;
-const int    CONST_PARAM::N_OF_THE_USING_BEST = 100;
+const int    CONST_PARAM::N_OF_THE_USING_BEST = 10;//100
 const int    CONST_PARAM::ITERATION_TIMES     = 2;
 const double CONST_PARAM::U_UPPER_LIM         = CONST_PARAM::U_G + CONST_PARAM::U_DIFF_LIM; // no units
 const double CONST_PARAM::U_LOWER_LIM         = CONST_PARAM::U_G - CONST_PARAM::U_DIFF_LIM; // no units
@@ -227,7 +227,7 @@ const float CONST_PARAM_FLOAT::COEFF_OF_REST        = (float)CONST_PARAM::COEFF_
 const float CONST_PARAM_FLOAT::CONTROL_PERIOD        = (float)CONST_PARAM::CONTROL_PERIOD;
 const float CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE = (float)CONST_PARAM::CONTROL_PERIOD / 2.0f;   // Set it to the 1/N value of CONTROL_PERIOD 
 
-const float CONST_PARAM_FLOAT::SIGMA_CONST[4] = {2.0f, 0.01f, 0.01f, 0.01f};
+const float CONST_PARAM_FLOAT::SIGMA_CONST[4] = {0.01f, 0.01f, 0.01f, 0.001f};
 
 #ifdef MCMPC_WITH_FORCE_STATE
     const float CONST_PARAM_FLOAT::INIT_TARGET_FX  = (float)CONST_PARAM::INIT_TARGET_FX;

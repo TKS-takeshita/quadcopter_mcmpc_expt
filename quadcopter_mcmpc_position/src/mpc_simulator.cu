@@ -153,136 +153,66 @@ namespace qc_mcmpc
         float v_plus[3], w_plus[3];
         bool col_constraint_flag = false;
 #endif
-        // float prev_vel[3];
-        // prev_vel[0] = prev_velocity_device[0];
-        // prev_vel[1] = prev_velocity_device[1];
-        // prev_vel[2] = prev_velocity_device[2];
-        // // 前時刻までの誤差の積分値
-        // float vel_int[3];
-        // vel_int[0] = vel_int_device[0];
-        // vel_int[1] = vel_int_device[1];
-        // vel_int[2] = vel_int_device[2];
-        // float prev_acc[3];
-        // prev_acc[0] = prev_acceleration_device[0];
-        // prev_acc[1] = prev_acceleration_device[1];
-        // prev_acc[2] = prev_acceleration_device[2];
-        float prev_omega[3];
-        prev_omega[0] = prev_angular_velocity_device[0];
-        prev_omega[1] = prev_angular_velocity_device[1];
-        prev_omega[2] = prev_angular_velocity_device[2];
+        float prev_vel[3];
+        prev_vel[0] = prev_velocity_device[0];
+        prev_vel[1] = prev_velocity_device[1];
+        prev_vel[2] = prev_velocity_device[2];
+        // 前時刻までの誤差の積分値
+        float vel_int[3];
+        vel_int[0] = vel_int_device[0];
+        vel_int[1] = vel_int_device[1];
+        vel_int[2] = vel_int_device[2];
+        float prev_acc[3];
+        prev_acc[0] = prev_acceleration_device[0];
+        prev_acc[1] = prev_acceleration_device[1];
+        prev_acc[2] = prev_acceleration_device[2];
         // オイラー積分とコスト評価
         for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
         {
             // PX4のPIDを素に速度, 加速度, 姿勢, スラスト, 角速度を導出
-            // float x_ref   = decoupled_position[i][x];
-            // float y_ref   = decoupled_position[i][y];
-            // float z_ref   = decoupled_position[i][z];
-            // float yaw_ref = decoupled_position[i][yaw];
+            float x_ref   = decoupled_position[i][x];
+            float y_ref   = decoupled_position[i][y];
+            float z_ref   = decoupled_position[i][z];
+            float yaw_ref = decoupled_position[i][yaw];
             float inv_mass = 1.0f / mass_of_machine_device;
-            // /*目標速度*/
-            // float vel_ref[3];
-            // vel_ref[0] = mpc_xy_p * (x_ref - var_p_temp[7]);
-            // vel_ref[1] = mpc_xy_p * (y_ref - var_p_temp[8]);
-            // vel_ref[2] = mpc_z_p  * (z_ref - var_p_temp[9]);
-
-            // /*目標加速度*/
-            // float vel_dot_x = (var_p_temp[10] - prev_vel[0]) / control_period_device;
-            // float vel_dot_y = (var_p_temp[11] - prev_vel[1]) / control_period_device;
-            // float vel_dot_z = (var_p_temp[12] - prev_vel[2]) / control_period_device;
-            // // 力を考慮する場合 a_ref = a_ref_pid - Fcut/m
-            // float a_ref[3];
-            // a_ref[0] = mpc_xy_vel_p_acc*(vel_ref[0]-var_p_temp[10])+mpc_xy_vel_i_acc*vel_int[0]-mpc_xy_vel_d_acc*(prev_acc[0]+lpf*(vel_dot_x-prev_acc[0]));
-            // a_ref[1] = mpc_xy_vel_p_acc*(vel_ref[1]-var_p_temp[11])+mpc_xy_vel_i_acc*vel_int[1]-mpc_xy_vel_d_acc*(prev_acc[1]+lpf*(vel_dot_y-prev_acc[1]));
-            // a_ref[2] = mpc_z_vel_p_acc* (vel_ref[2]-var_p_temp[12])+mpc_z_vel_i_acc* vel_int[2]-mpc_z_vel_d_acc *(prev_acc[2]+lpf*(vel_dot_z-prev_acc[2]));
-            // float thrust = mass_of_machine_device * sqrtf(a_ref[0]*a_ref[0] + a_ref[1]*a_ref[1] + (a_of_gravity_device - a_ref[2])*(a_of_gravity_device - a_ref[2]));
-            // thrust = fminf(thrust, max_thrust_device);
-            // float acc_produced[3];
-            // /*目標姿勢*/
-            // float body_z[3];
-            // body_z[0]     = -a_ref[0];
-            // body_z[1]     = -a_ref[1];
-            // body_z[2]     = a_of_gravity_device - a_ref[2];
-            // float bz_norm_inv = rsqrtf(body_z[0]*body_z[0]+body_z[1]*body_z[1]+body_z[2]*body_z[2]);
-            // body_z[0]    *= bz_norm_inv;
-            // body_z[1]    *= bz_norm_inv;
-            // body_z[2]    *= bz_norm_inv;
-            // acc_produced[0] = -body_z[0]*(thrust/mass_of_machine_device);
-            // acc_produced[1] = -body_z[1]*(thrust/mass_of_machine_device);
-            // acc_produced[2] = a_of_gravity_device-body_z[2]*(thrust/mass_of_machine_device);
-            // float yaw_now = arctan2f(2.0f*(var_p_temp[0]*var_p_temp[3]+var_p_temp[1]*var_p_temp[2]), var_p_temp[0]*var_p_temp[0]+var_p_temp[1]*var_p_temp[1]-var_p_temp[2]*var_p_temp[2]-var_p_temp[3]*var_p_temp[3]);
-            // float yaw_err = yaw_ref - yaw_now;
-            // if(yaw_err>M_PI)
-            //     yaw_err  -= 2.0f*M_PI;
-            // else if(yaw_err<-M_PI)
-            //     yaw_err  += 2.0f*M_PI;
-            // float yaw_ref_eff = yaw_now + mc_yaw_weight*yaw_err;
-            // float sy, cy;
-            // sin_cosf(yaw_ref_eff, &sy, &cy);
-            // float y_c[3]  = {-sy, cy, 0.0f};
-            // float body_x[3];
-            // float body_y[3];
-            // body_x[0]       =  y_c[1]*body_z[2];
-            // body_x[1]       = -y_c[0]*body_z[2];
-            // body_x[2]       = y_c[0] *body_z[1]-y_c[1]*body_z[0];
-            // float bx_norm_inv = rsqrtf(body_x[0]*body_x[0]+body_x[1]*body_x[1]+body_x[2]*body_x[2]);
-            // body_x[0]      *= bx_norm_inv;
-            // body_x[1]      *= bx_norm_inv;
-            // body_x[2]      *= bx_norm_inv;
-            // body_y[0]       = body_z[1]*body_x[2] - body_z[2]*body_x[1];
-            // body_y[1]       = body_z[2]*body_x[0] - body_z[0]*body_x[2];
-            // body_y[2]       = body_z[0]*body_x[1] - body_z[1]*body_x[0];
-            // float q_ref[4];
-            // float four_qw   = sqrtf(body_x[0] + body_y[1] + body_z[2] + 1.0f)*2.0f;
-            // q_ref[0]        = 0.25 * four_qw;
-            // q_ref[1]        = (body_y[2] - body_z[1]) / four_qw;
-            // q_ref[2]        = (body_z[0] - body_x[2]) / four_qw;
-            // q_ref[3]        = (body_x[1] - body_y[0]) / four_qw;
-            
-            // float q_sign    = ((var_p_temp[0]*q_ref[0]+var_p_temp[1]*q_ref[1]+var_p_temp[2]*q_ref[2]+var_p_temp[3]*q_ref[3])>=0.0f)?1.0f : -1.0f;
-            
-            float ref_th = fmaxf(0.0f, fminf(max_thrust_device, decoupled_position[i][x]));//th
-            float ref_roll = fmaxf(-1.0f, fminf(1.0f, decoupled_position[i][y]));
-            float ref_pitch = fmaxf(-1.0f, fminf(1.0f, decoupled_position[i][z]));
-            float ref_yaw = fmaxf(-1.0f, fminf(1.0f, decoupled_position[i][yaw]));
-            decoupled_position[i][x]  = ref_th;
-            decoupled_position[i][y] = ref_roll;
-            decoupled_position[i][z] = ref_pitch;
-            decoupled_position[i][yaw] = ref_yaw;
-            float torque_ref[3];
-            torque_ref[0] = mc_rollrate_p*(ref_roll - var_p_temp[4])   - mc_rollrate_d*(prev_omega[0]-var_p_temp[4]);
-            torque_ref[1] = mc_pitchrate_p*(ref_pitch - var_p_temp[5]) - mc_pitchrate_d*(prev_omega[1]-var_p_temp[5]);
-            torque_ref[2] = mc_yawrate_p*(ref_yaw - var_p_temp[6])     - mc_yawrate_d*(prev_omega[2]-var_p_temp[6]);
-            float allocator_ref[4];
-            for(int i=0; i<4; i++)
-                allocator_ref[i] = mix_device[i][0]*torque_ref[0]+mix_device[i][1]*torque_ref[1]+mix_device[i][2]*torque_ref[2]+mix_device[i][5]*ref_th;
-            // float ref_qw = sqrtf(fmaxf(0.0f, 1 - ref_qx*ref_qx - ref_qy*ref_qy - ref_qz*ref_qz));
-            // float sign_w = ((var_p_temp[0]*ref_qw+var_p_temp[1]*ref_qx+var_p_temp[2]*ref_qy+var_p_temp[3]*ref_qz)>=0.0f)?1.0f : -1.0f;
+            float vel_ref[3];
+            float a_ref[3];
             for ( float t = 0.0f; t < control_period_device - integration_step_size_device / 2; t += integration_step_size_device )
             {              
                 for ( int k = 0; k < _N_OF_ODES; k++ ) var_p_temp[k] = var_and_z_i_temp[k];
+                /*目標速度*/
+                
+                vel_ref[0] = mpc_xy_p * (x_ref - var_p_temp[7]);
+                vel_ref[1] = mpc_xy_p * (y_ref - var_p_temp[8]);
+                vel_ref[2] = mpc_z_p  * (z_ref - var_p_temp[9]);
+                /*目標加速度*/
+                float vel_dot_x = (var_p_temp[10] - prev_vel[0]) / control_period_device;
+                float vel_dot_y = (var_p_temp[11] - prev_vel[1]) / control_period_device;
+                float vel_dot_z = (var_p_temp[12] - prev_vel[2]) / control_period_device;
+                // 力を考慮する場合 a_ref = a_ref_pid - Fcut/m
+                a_ref[0] = mpc_xy_vel_p_acc*(vel_ref[0]-var_p_temp[10])+mpc_xy_vel_i_acc*vel_int[0]-mpc_xy_vel_d_acc*(prev_acc[0]+lpf*(vel_dot_x-prev_acc[0]));
+                a_ref[1] = mpc_xy_vel_p_acc*(vel_ref[1]-var_p_temp[11])+mpc_xy_vel_i_acc*vel_int[1]-mpc_xy_vel_d_acc*(prev_acc[1]+lpf*(vel_dot_y-prev_acc[1]));
+                a_ref[2] = mpc_z_vel_p_acc* (vel_ref[2]-var_p_temp[12])+mpc_z_vel_i_acc* vel_int[2]-mpc_z_vel_d_acc *(prev_acc[2]+lpf*(vel_dot_z-prev_acc[2]));
                 // PIDカスケード用修正
                 
-                /* e0p */ var_and_z_i_temp[0]  += (-0.5f*var_p_temp[1]*var_p_temp[4] - 0.5f*var_p_temp[2]*var_p_temp[5] - 0.5f*var_p_temp[3]*var_p_temp[6])*integration_step_size_device;
-                /* e1p */ var_and_z_i_temp[1]  += ( 0.5f*var_p_temp[0]*var_p_temp[4] + 0.5f*var_p_temp[2]*var_p_temp[6] - 0.5f*var_p_temp[3]*var_p_temp[5])*integration_step_size_device;
-                /* e2p */ var_and_z_i_temp[2]  += ( 0.5f*var_p_temp[0]*var_p_temp[5] + 0.5f*var_p_temp[3]*var_p_temp[4] - 0.5f*var_p_temp[1]*var_p_temp[6])*integration_step_size_device;
-                /* e3p */ var_and_z_i_temp[3]  += ( 0.5f*var_p_temp[0]*var_p_temp[6] + 0.5f*var_p_temp[1]*var_p_temp[5] - 0.5f*var_p_temp[2]*var_p_temp[4])*integration_step_size_device;
-                // normalize quaternion
-                float q_norm_inv = rsqrtf(var_and_z_i_temp[0]*var_and_z_i_temp[0] +var_and_z_i_temp[1]*var_and_z_i_temp[1] +var_and_z_i_temp[2]*var_and_z_i_temp[2] +var_and_z_i_temp[3]*var_and_z_i_temp[3]);
-                var_and_z_i_temp[0] *= q_norm_inv;
-                var_and_z_i_temp[1] *= q_norm_inv;
-                var_and_z_i_temp[2] *= q_norm_inv;
-                var_and_z_i_temp[3] *= q_norm_inv;
-                /* wxp */ var_and_z_i_temp[4]   = ref_roll;
-                /* wyp */ var_and_z_i_temp[5]   = ref_pitch;
-                /* wzp */ var_and_z_i_temp[6]   = ref_yaw;
+                // /* e0p */ var_and_z_i_temp[0]  += (-0.5f*var_p_temp[1]*var_p_temp[4] - 0.5f*var_p_temp[2]*var_p_temp[5] - 0.5f*var_p_temp[3]*var_p_temp[6])*integration_step_size_device;
+                // /* e1p */ var_and_z_i_temp[1]  += ( 0.5f*var_p_temp[0]*var_p_temp[4] + 0.5f*var_p_temp[2]*var_p_temp[6] - 0.5f*var_p_temp[3]*var_p_temp[5])*integration_step_size_device;
+                // /* e2p */ var_and_z_i_temp[2]  += ( 0.5f*var_p_temp[0]*var_p_temp[5] + 0.5f*var_p_temp[3]*var_p_temp[4] - 0.5f*var_p_temp[1]*var_p_temp[6])*integration_step_size_device;
+                // /* e3p */ var_and_z_i_temp[3]  += ( 0.5f*var_p_temp[0]*var_p_temp[6] + 0.5f*var_p_temp[1]*var_p_temp[5] - 0.5f*var_p_temp[2]*var_p_temp[4])*integration_step_size_device;
+                // // normalize quaternion
+                // float q_norm_inv = rsqrtf(var_and_z_i_temp[0]*var_and_z_i_temp[0] +var_and_z_i_temp[1]*var_and_z_i_temp[1] +var_and_z_i_temp[2]*var_and_z_i_temp[2] +var_and_z_i_temp[3]*var_and_z_i_temp[3]);
+                // var_and_z_i_temp[0] *= q_norm_inv;
+                // var_and_z_i_temp[1] *= q_norm_inv;
+                // var_and_z_i_temp[2] *= q_norm_inv;
+                // var_and_z_i_temp[3] *= q_norm_inv;
 
                 /* xp  */ var_and_z_i_temp[7]  +=  var_p_temp[10] * integration_step_size_device;
                 /* yp  */ var_and_z_i_temp[8]  +=  var_p_temp[11] * integration_step_size_device;
                 /* zp  */ var_and_z_i_temp[9]  +=  var_p_temp[12] * integration_step_size_device;
 
-                /* xpp */ var_and_z_i_temp[10] +=  (-ref_th) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[2] + 2.0f*var_p_temp[1]*var_p_temp[3])* integration_step_size_device;
-                /* ypp */ var_and_z_i_temp[11] += (-ref_th) * inv_mass * (2.0f*var_p_temp[2]*var_p_temp[3] - 2.0f*var_p_temp[0]*var_p_temp[1]) * integration_step_size_device;
-                /* zpp */ var_and_z_i_temp[12] += ((-ref_th) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[0] + 2.0f*var_p_temp[3]*var_p_temp[3] - 1.0f) + a_of_gravity_device) * integration_step_size_device;
+                /* xpp */ var_and_z_i_temp[10] += a_ref[0] * integration_step_size_device;
+                /* ypp */ var_and_z_i_temp[11] += a_ref[1] * integration_step_size_device;
+                /* zpp */ var_and_z_i_temp[12] += a_ref[2] * integration_step_size_device;
 
                 /* z_i */ var_and_z_i_temp[_N_OF_ODES] += var_and_z_i_temp[9] * integration_step_size_device;
 
@@ -309,16 +239,16 @@ namespace qc_mcmpc
                  +  _COST_Q_E1*(var_and_z_i_temp[1] -target_state_device.e1)*(var_and_z_i_temp[1] -target_state_device.e1)+ _COST_Q_E2*(var_and_z_i_temp[2] -target_state_device.e2)*(var_and_z_i_temp[2] -target_state_device.e2)+ _COST_Q_E3*(var_and_z_i_temp[3] -target_state_device.e3)*(var_and_z_i_temp[3] -target_state_device.e3)         // e1, e2, e3
                  +  _COST_Q_WX*(var_and_z_i_temp[4] -target_state_device.wx)*(var_and_z_i_temp[4] -target_state_device.wx)+ _COST_Q_WY*(var_and_z_i_temp[5] -target_state_device.wy)*(var_and_z_i_temp[5] -target_state_device.wy)+ _COST_Q_WZ*(var_and_z_i_temp[6] -target_state_device.wz)*(var_and_z_i_temp[6] -target_state_device.wz)          // wx, wy, wz
                  +  _COST_Q_ZI*var_and_z_i_temp[_N_OF_ODES]*var_and_z_i_temp[_N_OF_ODES]                                                                                                  // z_i
-                 +  _COST_R_X*(decoupled_position[i][x])*(decoupled_position[i][x])
-                 +  _COST_R_Y*decoupled_position[i][y]*decoupled_position[i][y]
-                 +  _COST_R_Z*decoupled_position[i][z]*decoupled_position[i][z]
-                 +  _COST_R_YAW*decoupled_position[i][yaw]*decoupled_position[i][yaw]
+                 +  _COST_R_X*(decoupled_position[i][x]-target_state_device.x)*(decoupled_position[i][x]-target_state_device.x)
+                 +  _COST_R_Y*(decoupled_position[i][y]-target_state_device.y)*(decoupled_position[i][y]-target_state_device.y)
+                 +  _COST_R_Z*(decoupled_position[i][z]-target_state_device.z)*(decoupled_position[i][z]-target_state_device.z)
+                 +  _COST_R_YAW*(decoupled_position[i][yaw])*(decoupled_position[i][yaw])
             );
             
-            // vel_int[0] += (vel_ref[0]-var_and_z_i_temp[10]-arw_gain*(a_ref[0]-acc_produced[0]))*control_period_device;
-            // vel_int[1] += (vel_ref[1]-var_and_z_i_temp[11]-arw_gain*(a_ref[1]-acc_produced[1]))*control_period_device;
-            // vel_int[2] += (vel_ref[2]-var_and_z_i_temp[12])*control_period_device;
-            // vel_int[2] = fminf(fmaxf(vel_int[2], -a_of_gravity_device), a_of_gravity_device);
+            vel_int[0] += (vel_ref[0]-var_and_z_i_temp[10])*control_period_device;
+            vel_int[1] += (vel_ref[1]-var_and_z_i_temp[11])*control_period_device;
+            vel_int[2] += (vel_ref[2]-var_and_z_i_temp[12])*control_period_device;
+            vel_int[2] = fminf(fmaxf(vel_int[2], -a_of_gravity_device), a_of_gravity_device);
         }
         // 衝突に対して制約を与えたい場合はここに記述
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
