@@ -360,7 +360,7 @@ int main(int argc, char *argv[])
             var_p_save[i][j] = 0.0f;
         }
     }
-    csv.open(("/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_" + ([](){auto n=std::chrono::system_clock::now();std::time_t t=std::chrono::system_clock::to_time_t(n);std::tm tm;localtime_r(&t,&tm);std::ostringstream s;s<<std::put_time(&tm,"%Y%m%d_%H%M%S");return s.str();})() + ".csv"), std::ios::out);
+    csv.open(("/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_" + ([](){auto n=std::chrono::system_clock::now();std::time_t t=std::chrono::system_clock::to_time_t(n);std::tm tm;localtime_r(&t,&tm);std::ostringstream s;s<<std::put_time(&tm,"%Y%m%d_%H%M%S");return s.str();})() + ".csv"), std::ios::out);
     const char* names[_N_OF_ODES] = {
         "e0","e1","e2","e3",
         "wx","wy","wz",
@@ -386,7 +386,7 @@ int main(int argc, char *argv[])
     }
     csv << ",cost";
     csv << "\n";
-    rclcpp::Rate rate(20);
+    rclcpp::Rate rate(50);
     
     while (rclcpp::ok()) {
 
