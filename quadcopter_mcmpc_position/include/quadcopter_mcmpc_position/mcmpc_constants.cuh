@@ -108,26 +108,14 @@ namespace qc_mcmpc{
     extern __constant__ input_array average_input_device;
     extern __constant__ float sigma_k_device[4];
 
+    extern void update_target_state_device();
+
     static float prev_velocity_host[3] = {0.0f, 0.0f, 0.0f};
     static float prev_acceleration_host[3] = {0.0f, 0.0f, 0.0f};
     static float vel_int_host[3] = {0.0f, 0.0f, 0.0f};
 
 
-    qc_mcmpc::target_state_t target_host{
-        CONST_PARAM_FLOAT::INIT_TARGET_E0,
-        CONST_PARAM_FLOAT::INIT_TARGET_E1,
-        CONST_PARAM_FLOAT::INIT_TARGET_E2,
-        CONST_PARAM_FLOAT::INIT_TARGET_E3,
-        CONST_PARAM_FLOAT::INIT_TARGET_WX,
-        CONST_PARAM_FLOAT::INIT_TARGET_WY,
-        CONST_PARAM_FLOAT::INIT_TARGET_WZ,
-        CONST_PARAM_FLOAT::INIT_TARGET_X,
-        CONST_PARAM_FLOAT::INIT_TARGET_Y,
-        CONST_PARAM_FLOAT::INIT_TARGET_Z,
-        CONST_PARAM_FLOAT::INIT_TARGET_XP,
-        CONST_PARAM_FLOAT::INIT_TARGET_YP,
-        CONST_PARAM_FLOAT::INIT_TARGET_ZP
-    };
+    extern target_state_t target_host;
 
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
     extern __constant__ float x_wall_device;

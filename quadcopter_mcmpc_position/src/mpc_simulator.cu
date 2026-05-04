@@ -147,6 +147,13 @@ namespace qc_mcmpc
         
         float var_p_temp[_N_OF_ODES];
 
+        // if (threadIdx.x == 0 && blockIdx.x == 0) {
+        //     printf("target: x=%f y=%f z=%f\n",
+        //         target_state_device.x,
+        //         target_state_device.y,
+        //         target_state_device.z);
+        // }
+
         // 衝突予測用変数
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
         bool  col_flag = false;

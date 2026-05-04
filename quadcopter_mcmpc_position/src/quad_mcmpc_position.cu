@@ -153,74 +153,71 @@ void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
         pre_y = false;
     }
 
-    if (b_button & !pre_b) {
-        disarm_request = true;
-        pre_b = true;
-        RCLCPP_WARN(rclcpp::get_logger("mcmpc"), "B -> DISARM");
-    }
-    else if(!b_button){
-        pre_b = false;
-    }
+    bool target_changed = false;
 
-    if (power_button){
-        kill_request = true;
+    if (lb_button && !pre_lb) {
+        target_host.x += move_dist;
+        target_changed = true;
+        RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
+            "LB -> target x=%f y=%f z=%f",
+            target_host.x, target_host.y, target_host.z);
     }
+    pre_lb = lb_button;
 
-    if (lb_button || rb_button || back_button || start_button || stick_left_button || stick_right_button){
-        if (lb_button & !pre_lb){
-            target_host.x += move_dist;
-            pre_lb = true;
-            RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "LB pressed -> move forward");
-        }
-        else if(!lb_button)
-            pre_lb = false;
-        if(rb_button & !pre_rb){
-            target_host.x -= move_dist;
-            pre_rb = true;
-            RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "RB pressed -> move backward");
-        }
-        else if(!rb_button)
-            pre_rb = false;
-        if(back_button & !pre_back){
-            target_host.y += move_dist;//move to right
-            pre_back = true;
-            RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "Back pressed -> move right");
-        }
-        else if(!back_button)
-            pre_back = false;
-        if(start_button & !pre_start){
-            target_host.y -= move_dist;//move to left
-            pre_start = true;
-            RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "Start pressed -> move left");
-        }
-        else if(!start_button)
-            pre_start = false;
-        if(stick_left_button & !pre_stick_left){
-            target_yaw = wrap_pi(current_yaw + rotate_angle); // 時計回りに回転
-            float half_yaw = 0.5f * target_yaw;
-            target_host.e0 = std::cos(half_yaw);  // w
-            target_host.e1 = 0.0f;                // x
-            target_host.e2 = 0.0f;                // y
-            target_host.e3 = std::sin(half_yaw);  // z
-            pre_stick_left = true;
-            RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "Left stick button pressed -> rotate CW");
-        }
-        else if(stick_left_button)
-            pre_stick_left = false;
-        if(stick_right_button & !pre_stick_right){
-            target_yaw = wrap_pi(current_yaw - rotate_angle); // 反時計回りに回転
-            float half_yaw = 0.5f * target_yaw;
-            target_host.e0 = std::cos(half_yaw);  // w
-            target_host.e1 = 0.0f;                // x
-            target_host.e2 = 0.0f;                // y
-            target_host.e3 = std::sin(half_yaw);  // z
-            pre_stick_right = true;
-            RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "right stick button pressed -> rotate CCW");
-        }
-        else if(!stick_right_button){
-            pre_stick_right = false;
-        }
-        cudaMemcpyToSymbol(qc_mcmpc::target_state_device, &target_host, sizeof(qc_mcmpc::target_state_t));
+    if (rb_button && !pre_rb) {
+        target_host.x -= move_dist;
+        target_changed = true;
+        RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
+            "RB -> target x=%f y=%f z=%f",
+            target_host.x, target_host.y, target_host.z);
+    }
+    pre_rb = rb_button;
+
+    if (back_button && !pre_back) {
+        target_host.y += move_dist;
+        target_changed = true;
+        RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
+            "Back -> target x=%f y=%f z=%f",
+            target_host.x, target_host.y, target_host.z);
+    }
+    pre_back = back_button;
+
+    if (start_button && !pre_start) {
+        target_host.y -= move_dist;
+        target_changed = true;
+        RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
+            "Start -> target x=%f y=%f z=%f",
+            target_host.x, target_host.y, target_host.z);
+    }
+    pre_start = start_button;
+
+    if (stick_left_button && !pre_stick_left) {
+        target_yaw = wrap_pi(current_yaw + rotate_angle);
+        float half_yaw = 0.5f * target_yaw;
+        target_host.e0 = std::cos(half_yaw);
+        target_host.e1 = 0.0f;
+        target_host.e2 = 0.0f;
+        target_host.e3 = std::sin(half_yaw);
+        target_changed = true;
+    }
+    pre_stick_left = stick_left_button;
+
+    if (stick_right_button && !pre_stick_right) {
+        target_yaw = wrap_pi(current_yaw - rotate_angle);
+        float half_yaw = 0.5f * target_yaw;
+        target_host.e0 = std::cos(half_yaw);
+        target_host.e1 = 0.0f;
+        target_host.e2 = 0.0f;
+        target_host.e3 = std::sin(half_yaw);
+        target_changed = true;
+    }
+    pre_stick_right = stick_right_button;
+
+    if (target_changed) {
+        qc_mcmpc::update_target_state_device();
+        RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
+            "target copied to device: x=%f y=%f z=%f",
+            target_host.x, target_host.y, target_host.z);
     }
 }
 
@@ -354,8 +351,8 @@ int main(int argc, char *argv[])
     auto traj_pub = node->create_publisher<px4_msgs::msg::TrajectorySetpoint>("/fmu/in/trajectory_setpoint", 10);
     auto cmd_pub = node->create_publisher<px4_msgs::msg::VehicleCommand>("/fmu/in/vehicle_command", 10);
     auto joy_sub = node->create_subscription<sensor_msgs::msg::Joy>("/joy", 10, joy_callback);
-    float var_p_save[_DEVICE_CONST_HORIZON][_N_OF_ODES+1];
-    for(int i= 0; i<_DEVICE_CONST_HORIZON; i++) {
+    float var_p_save[_DEVICE_CONST_HORIZON+1][_N_OF_ODES+1];
+    for(int i= 0; i<_DEVICE_CONST_HORIZON+1; i++) {
         for(int j=0; j<_N_OF_ODES+1; j++){
             var_p_save[i][j] = 0.0f;
         }

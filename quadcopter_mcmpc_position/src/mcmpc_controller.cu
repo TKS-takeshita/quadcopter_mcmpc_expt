@@ -54,6 +54,8 @@ namespace qc_mcmpc
     __constant__ float prev_acceleration_device[3];
     __constant__ float prev_angular_velocity_device[3];
 
+    target_state_t target_host;
+
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
 	__constant__ float x_wall_device;
 	__constant__ float wall_nv_x_device;
@@ -77,6 +79,8 @@ namespace qc_mcmpc
 	// コスト再計算用関数
 	static void input_constraint_cpu(float& rps_z, float& rps_wx, float& rps_wy, float& rps_ws);
 
+    void update_target_state_device();
+
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
 	static float dot_vec_cpu(float v1_x, float v1_y, float v1_z, float v2_x, float v2_y, float v2_z);
 	static void cross_vec_cpu(float v1_x, float v1_y, float v1_z, float v2_x, float v2_y, float v2_z, float& v_ans_x, float& v_ans_y, float& v_ans_z);
@@ -90,20 +94,22 @@ namespace qc_mcmpc
 	mcmpc_controller::mcmpc_controller()
 	{
 		// 目標状態の設定
-		target_state_t init_target{};
-		init_target.e0 = CONST_PARAM_FLOAT::INIT_TARGET_E0;
-		init_target.e1 = CONST_PARAM_FLOAT::INIT_TARGET_E1;
-		init_target.e2 = CONST_PARAM_FLOAT::INIT_TARGET_E2;
-		init_target.e3 = CONST_PARAM_FLOAT::INIT_TARGET_E3;
-		init_target.wx = CONST_PARAM_FLOAT::INIT_TARGET_WX;
-		init_target.wy = CONST_PARAM_FLOAT::INIT_TARGET_WY;
-		init_target.wz = CONST_PARAM_FLOAT::INIT_TARGET_WZ;
-		init_target.x = CONST_PARAM_FLOAT::INIT_TARGET_X;
-		init_target.y = CONST_PARAM_FLOAT::INIT_TARGET_Y;
-		init_target.z = CONST_PARAM_FLOAT::INIT_TARGET_Z;
-		init_target.xp = CONST_PARAM_FLOAT::INIT_TARGET_ZP;
-		init_target.yp = CONST_PARAM_FLOAT::INIT_TARGET_YP;
-		init_target.zp = CONST_PARAM_FLOAT::INIT_TARGET_ZP;
+
+        target_host = {
+            CONST_PARAM_FLOAT::INIT_TARGET_E0,
+            CONST_PARAM_FLOAT::INIT_TARGET_E1,
+            CONST_PARAM_FLOAT::INIT_TARGET_E2,
+            CONST_PARAM_FLOAT::INIT_TARGET_E3,
+            CONST_PARAM_FLOAT::INIT_TARGET_WX,
+            CONST_PARAM_FLOAT::INIT_TARGET_WY,
+            CONST_PARAM_FLOAT::INIT_TARGET_WZ,
+            CONST_PARAM_FLOAT::INIT_TARGET_X,
+            CONST_PARAM_FLOAT::INIT_TARGET_Y,
+            CONST_PARAM_FLOAT::INIT_TARGET_Z,
+            CONST_PARAM_FLOAT::INIT_TARGET_XP,
+            CONST_PARAM_FLOAT::INIT_TARGET_YP,
+            CONST_PARAM_FLOAT::INIT_TARGET_ZP
+        };
 
 		// 分散の設定　（変数なのは分散固定化が暫定的措置であるため）
 		for(int i=0; i<4; i++)
@@ -143,7 +149,7 @@ namespace qc_mcmpc
 		input_array_host_vec_elite = input_vec_host_elite_temp;
 
 		//  __constant__ メモリに定数をコピー
-		cudaMemcpyToSymbol(target_state_device, &init_target, sizeof(target_state_t));
+		cudaMemcpyToSymbol(target_state_device, &target_host, sizeof(target_state_t));
 
 		cudaMemcpyToSymbol( sigma_k_device, sigma_k, 4 * sizeof( float ) );
 
@@ -250,6 +256,20 @@ namespace qc_mcmpc
 		if(rps_ccw2 > CONST_PARAM_FLOAT::U_UPPER_LIM) rps_ccw2 = CONST_PARAM_FLOAT::U_UPPER_LIM;
 		if(rps_ccw2 < CONST_PARAM_FLOAT::U_LOWER_LIM) rps_ccw2 = CONST_PARAM_FLOAT::U_LOWER_LIM;
 	}
+
+    void update_target_state_device()
+    {
+        cudaError_t err = cudaMemcpyToSymbol(
+            target_state_device,
+            &target_host,
+            sizeof(target_state_t)
+        );
+
+        if (err != cudaSuccess) {
+            std::cerr << "cudaMemcpyToSymbol target_state_device failed: "
+                    << cudaGetErrorString(err) << std::endl;
+        }
+    }
 
     float mcmpc_controller::calc_weighted_average_and_min_cost(float var_and_z_i[])
 	{
