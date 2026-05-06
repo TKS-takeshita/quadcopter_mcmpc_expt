@@ -11,7 +11,7 @@ const double CONST_PARAM::I_XX            = 0.04418; //kg・m^2　from CAD
 const double CONST_PARAM::I_YY            = 0.04226;
 const double CONST_PARAM::I_ZZ            = 0.05619;
 const double CONST_PARAM::ROTOR_DISTANCE  = 0.50; //m 向かい合うロータ間の距離
-const double CONST_PARAM::MASS_OF_MACHINE = 2.35; // kg
+const double CONST_PARAM::MASS_OF_MACHINE = 2.350; // kg
 const double CONST_PARAM::MAX_RPS_POW     = CONST_PARAM::MAX_RPS * CONST_PARAM::MAX_RPS;
 
 const double CONST_PARAM::MAX_THRUST      = 53.6;      // N
@@ -54,7 +54,7 @@ const double CONST_PARAM::U_LOWER_LIM         = CONST_PARAM::U_G - CONST_PARAM::
     const double CONST_PARAM::MC_ROLL_P        = 4.00;
     const double CONST_PARAM::MC_PITCH_P       = 4.00;
     const double CONST_PARAM::MC_YAW_P         = 2.80;
-    const double CONST_PARAM::MPC_THR_HOVER    = 0.43 * CONST_PARAM::MAX_THRUST;// [N]
+    const double CONST_PARAM::MPC_THR_HOVER    = 0.65 * CONST_PARAM::MAX_THRUST;// [N]
     const double CONST_PARAM::MPC_VEL_LP       = 0.0;// velocity derivative low pass cutoff frequency[Hz]
     const double CONST_PARAM::MPC_VELD_LP      = 5.0;// velocity derivative low pass cutoff frequency[Hz]
     const double CONST_PARAM::MC_ROLLRATE_P    = 0.15;
@@ -227,7 +227,7 @@ const float CONST_PARAM_FLOAT::COEFF_OF_REST        = (float)CONST_PARAM::COEFF_
 const float CONST_PARAM_FLOAT::CONTROL_PERIOD        = (float)CONST_PARAM::CONTROL_PERIOD;
 const float CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE = (float)CONST_PARAM::CONTROL_PERIOD / 2.0f;   // Set it to the 1/N value of CONTROL_PERIOD 
 
-const float CONST_PARAM_FLOAT::SIGMA_CONST[4] = {0.01f, 0.01f, 0.01f, 0.001f};
+const float CONST_PARAM_FLOAT::SIGMA_CONST[4] = {2.0f, 0.1f, 0.1f, 0.1f};
 
 #ifdef MCMPC_WITH_FORCE_STATE
     const float CONST_PARAM_FLOAT::INIT_TARGET_FX  = (float)CONST_PARAM::INIT_TARGET_FX;

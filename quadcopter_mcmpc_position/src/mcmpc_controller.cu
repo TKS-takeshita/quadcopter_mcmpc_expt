@@ -117,15 +117,10 @@ namespace qc_mcmpc
 
         // PIDカスケード用修正
 		for(int i = 0; i < _DEVICE_CONST_HORIZON; i++){
-			best_input_array.decoupled_position[i][x] = CONST_PARAM_FLOAT::INIT_TARGET_X;
-            best_input_array.decoupled_position[i][y] = CONST_PARAM_FLOAT::INIT_TARGET_Y;
-            best_input_array.decoupled_position[i][z] = CONST_PARAM_FLOAT::INIT_TARGET_Z;
-            best_input_array.decoupled_position[i][yaw] = atan2f(
-                                                            2.0f * (CONST_PARAM_FLOAT::INIT_TARGET_E0 * CONST_PARAM_FLOAT::INIT_TARGET_E3
-                                                                + CONST_PARAM_FLOAT::INIT_TARGET_E1 * CONST_PARAM_FLOAT::INIT_TARGET_E2),
-                                                            1.0f - 2.0f * (CONST_PARAM_FLOAT::INIT_TARGET_E2 * CONST_PARAM_FLOAT::INIT_TARGET_E2
-                                                                        + CONST_PARAM_FLOAT::INIT_TARGET_E3 * CONST_PARAM_FLOAT::INIT_TARGET_E3)
-                                                        );
+			best_input_array.decoupled_position[i][th] = CONST_PARAM_FLOAT::MPC_THR_HOVER;
+            best_input_array.decoupled_position[i][wx] = CONST_PARAM_FLOAT::INIT_TARGET_WX;
+            best_input_array.decoupled_position[i][wy] = CONST_PARAM_FLOAT::INIT_TARGET_WY;
+            best_input_array.decoupled_position[i][wz] = CONST_PARAM_FLOAT::INIT_TARGET_WZ;
         }
 		// curandの乱数シード設定
 		cudaMalloc(&curand_state_array, CONST_PARAM::N_OF_SAMPLES * sizeof(curandState));
@@ -322,66 +317,40 @@ namespace qc_mcmpc
             var_and_z_i_temp[i] = var_and_z_i[i];
 
         float var_p_temp[_N_OF_ODES];
-		float prev_vel[3];
-        prev_vel[0] = prev_velocity_host[0];
-        prev_vel[1] = prev_velocity_host[1];
-        prev_vel[2] = prev_velocity_host[2];
-        // 前時刻までの誤差の積分値
-        float vel_int[3];
-        vel_int[0] = vel_int_host[0];
-        vel_int[1] = vel_int_host[1];
-        vel_int[2] = vel_int_host[2];
-        float prev_acc[3];
-        prev_acc[0] = prev_acceleration_host[0];
-        prev_acc[1] = prev_acceleration_host[1];
-        prev_acc[2] = prev_acceleration_host[2];
         
         for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
         {
 			// PIDカスケード用修正
-            float x_ref   = best_input_array.decoupled_position[i][x];
-            float y_ref   = best_input_array.decoupled_position[i][y];
-            float z_ref   = best_input_array.decoupled_position[i][z];
-            float yaw_ref = best_input_array.decoupled_position[i][yaw];
-            float vel_ref[3];
+            float thrust_ref  = best_input_array.decoupled_position[i][th];
+            float omega_x_ref = best_input_array.decoupled_position[i][wx];
+            float omega_y_ref = best_input_array.decoupled_position[i][wy];
+            float omega_z_ref = best_input_array.decoupled_position[i][wz];
+            float tau         = 10.0f;
+            float inv_mass = 1.0f / CONST_PARAM_FLOAT::MASS_OF_MACHINE;
             for ( float t = 0.0f; t < CONST_PARAM_FLOAT::CONTROL_PERIOD - CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE  / 2; t += CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE )
             {
-				for ( int k = 0; k < _N_OF_ODES; k++ ) var_p_temp[k] = var_and_z_i_temp[k];
-                /*目標速度*/
-                vel_ref[0] = CONST_PARAM_FLOAT::MPC_XY_P * (x_ref - var_p_temp[7]);
-                vel_ref[1] = CONST_PARAM_FLOAT::MPC_XY_P * (y_ref - var_p_temp[8]);
-                vel_ref[2] = CONST_PARAM_FLOAT::MPC_Z_P  * (z_ref - var_p_temp[9]);
-                /*目標加速度*/
-                float vel_dot_x = (var_p_temp[10] - prev_vel[0]) / CONST_PARAM_FLOAT::CONTROL_PERIOD;
-                float vel_dot_y = (var_p_temp[11] - prev_vel[1]) / CONST_PARAM_FLOAT::CONTROL_PERIOD;
-                float vel_dot_z = (var_p_temp[12] - prev_vel[2]) / CONST_PARAM_FLOAT::CONTROL_PERIOD;
-                // 力を考慮する場合 a_ref = a_ref_pid - Fcut/m
-                float a_ref[3];
-                a_ref[0] = CONST_PARAM_FLOAT::MPC_XY_VEL_P_ACC*(vel_ref[0]-var_p_temp[10])+CONST_PARAM_FLOAT::MPC_XY_VEL_I_ACC*vel_int[0]-CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC*(prev_acc[0]+CONST_PARAM_FLOAT::LPF*(vel_dot_x-prev_acc[0]));
-                a_ref[1] = CONST_PARAM_FLOAT::MPC_XY_VEL_P_ACC*(vel_ref[1]-var_p_temp[11])+CONST_PARAM_FLOAT::MPC_XY_VEL_I_ACC*vel_int[1]-CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC*(prev_acc[1]+CONST_PARAM_FLOAT::LPF*(vel_dot_y-prev_acc[1]));
-                a_ref[2] = CONST_PARAM_FLOAT::MPC_Z_VEL_P_ACC* (vel_ref[2]-var_p_temp[12])+CONST_PARAM_FLOAT::MPC_Z_VEL_I_ACC* vel_int[2]-CONST_PARAM_FLOAT::MPC_Z_VEL_D_ACC *(prev_acc[2]+CONST_PARAM_FLOAT::LPF*(vel_dot_z-prev_acc[2]));
-                float inv_mass = 1.0f / CONST_PARAM_FLOAT::MASS_OF_MACHINE;
-                // /* e0p */ var_and_z_i_temp[0]  += (-0.5f*var_p_temp[1]*var_p_temp[4] - 0.5f*var_p_temp[2]*var_p_temp[5] - 0.5f*var_p_temp[3]*var_p_temp[6])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
-                // /* e1p */ var_and_z_i_temp[1]  += ( 0.5f*var_p_temp[0]*var_p_temp[4] + 0.5f*var_p_temp[2]*var_p_temp[6] - 0.5f*var_p_temp[3]*var_p_temp[5])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
-                // /* e2p */ var_and_z_i_temp[2]  += ( 0.5f*var_p_temp[0]*var_p_temp[5] + 0.5f*var_p_temp[3]*var_p_temp[4] - 0.5f*var_p_temp[1]*var_p_temp[6])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
-                // /* e3p */ var_and_z_i_temp[3]  += ( 0.5f*var_p_temp[0]*var_p_temp[6] + 0.5f*var_p_temp[1]*var_p_temp[5] - 0.5f*var_p_temp[2]*var_p_temp[4])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
-                // // normalize quaternion
-                // float q_norm_inv = rsqrtf(var_and_z_i_temp[0]*var_and_z_i_temp[0] +var_and_z_i_temp[1]*var_and_z_i_temp[1] +var_and_z_i_temp[2]*var_and_z_i_temp[2] +var_and_z_i_temp[3]*var_and_z_i_temp[3]);
-                // var_and_z_i_temp[0] *= q_norm_inv;
-                // var_and_z_i_temp[1] *= q_norm_inv;
-                // var_and_z_i_temp[2] *= q_norm_inv;
-                // var_and_z_i_temp[3] *= q_norm_inv;
-                // /* wxp */ var_and_z_i_temp[4]   = ref_roll;
-                // /* wyp */ var_and_z_i_temp[5]   = ref_pitch;
-                // /* wzp */ var_and_z_i_temp[6]   = ref_yaw;
+				for ( int k = 0; k < _N_OF_ODES; k++ ) var_p_temp[k] = var_and_z_i_temp[k];                
 
-                /* xp  */ var_and_z_i_temp[7]  +=  var_p_temp[10] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
-                /* yp  */ var_and_z_i_temp[8]  +=  var_p_temp[11] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
-                /* zp  */ var_and_z_i_temp[9]  +=  var_p_temp[12] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
+                /* e0p */ var_and_z_i_temp[0]  += (-0.5f*var_p_temp[1]*var_p_temp[4] - 0.5f*var_p_temp[2]*var_p_temp[5] - 0.5f*var_p_temp[3]*var_p_temp[6])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* e1p */ var_and_z_i_temp[1]  += ( 0.5f*var_p_temp[0]*var_p_temp[4] + 0.5f*var_p_temp[2]*var_p_temp[6] - 0.5f*var_p_temp[3]*var_p_temp[5])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* e2p */ var_and_z_i_temp[2]  += ( 0.5f*var_p_temp[0]*var_p_temp[5] + 0.5f*var_p_temp[3]*var_p_temp[4] - 0.5f*var_p_temp[1]*var_p_temp[6])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* e3p */ var_and_z_i_temp[3]  += ( 0.5f*var_p_temp[0]*var_p_temp[6] + 0.5f*var_p_temp[1]*var_p_temp[5] - 0.5f*var_p_temp[2]*var_p_temp[4])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                float q_norm_inv = rsqrtf(var_and_z_i_temp[0]*var_and_z_i_temp[0] +var_and_z_i_temp[1]*var_and_z_i_temp[1] +var_and_z_i_temp[2]*var_and_z_i_temp[2] +var_and_z_i_temp[3]*var_and_z_i_temp[3]);
+                var_and_z_i_temp[0] *= q_norm_inv;
+                var_and_z_i_temp[1] *= q_norm_inv;
+                var_and_z_i_temp[2] *= q_norm_inv;
+                var_and_z_i_temp[3] *= q_norm_inv;
+                /* wxp */ var_and_z_i_temp[4]  += tau * (omega_x_ref - var_and_z_i_temp[4]) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* wyp */ var_and_z_i_temp[5]  += tau * (omega_y_ref - var_and_z_i_temp[5]) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* wzp */ var_and_z_i_temp[6]  += tau * (omega_z_ref - var_and_z_i_temp[6]) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
 
-                /* xpp */ var_and_z_i_temp[10] += a_ref[0] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
-                /* ypp */ var_and_z_i_temp[11] += a_ref[1] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
-                /* zpp */ var_and_z_i_temp[12] += a_ref[2] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
+                /* xp  */ var_and_z_i_temp[7]  +=  var_p_temp[10] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* yp  */ var_and_z_i_temp[8]  +=  var_p_temp[11] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* zp  */ var_and_z_i_temp[9]  +=  var_p_temp[12] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+
+                /* xpp */ var_and_z_i_temp[10] +=  (-thrust_ref) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[2] + 2.0f*var_p_temp[1]*var_p_temp[3])* CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* ypp */ var_and_z_i_temp[11] += (-thrust_ref) * inv_mass * (2.0f*var_p_temp[2]*var_p_temp[3] - 2.0f*var_p_temp[0]*var_p_temp[1]) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* zpp */ var_and_z_i_temp[12] += ((-thrust_ref) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[0] + 2.0f*var_p_temp[3]*var_p_temp[3] - 1.0f) + CONST_PARAM_FLOAT::A_OF_GRAVITY) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
 
                 /* z_i */ var_and_z_i_temp[_N_OF_ODES] += var_and_z_i_temp[9] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
 
@@ -409,16 +378,11 @@ namespace qc_mcmpc
                  +  _COST_Q_E1*(var_and_z_i_temp[1] -target_host.e1)*(var_and_z_i_temp[1] -target_host.e1)+ _COST_Q_E2*(var_and_z_i_temp[2] -target_host.e2)*(var_and_z_i_temp[2] -target_host.e2)+ _COST_Q_E3*(var_and_z_i_temp[3] -target_host.e3)*(var_and_z_i_temp[3] -target_host.e3)         // e1, e2, e3
                  +  _COST_Q_WX*(var_and_z_i_temp[4] -target_host.wx)*(var_and_z_i_temp[4] -target_host.wx)+ _COST_Q_WY*(var_and_z_i_temp[5] -target_host.wy)*(var_and_z_i_temp[5] -target_host.wy)+ _COST_Q_WZ*(var_and_z_i_temp[6] -target_host.wz)*(var_and_z_i_temp[6] -target_host.wz)          // wx, wy, wz
                  +  _COST_Q_ZI*var_and_z_i_temp[_N_OF_ODES]*var_and_z_i_temp[_N_OF_ODES]                                                                                                  // z_i
-                 +  _COST_R_X*(best_input_array.decoupled_position[i][x])*(best_input_array.decoupled_position[i][x])
-                 +  _COST_R_Y*best_input_array.decoupled_position[i][y]*best_input_array.decoupled_position[i][y]
-                 +  _COST_R_Z*best_input_array.decoupled_position[i][z]*best_input_array.decoupled_position[i][z]
-                 +  _COST_R_YAW*best_input_array.decoupled_position[i][yaw]*best_input_array.decoupled_position[i][yaw]
+                 +  _COST_R_X*(best_input_array.decoupled_position[i][th]-CONST_PARAM_FLOAT::MPC_THR_HOVER)*(best_input_array.decoupled_position[i][th]-CONST_PARAM_FLOAT::MPC_THR_HOVER)
+                 +  _COST_R_Y*best_input_array.decoupled_position[i][wx]*best_input_array.decoupled_position[i][wx]
+                 +  _COST_R_Z*best_input_array.decoupled_position[i][wy]*best_input_array.decoupled_position[i][wy]
+                 +  _COST_R_YAW*best_input_array.decoupled_position[i][wz]*best_input_array.decoupled_position[i][wz]
             );
-            
-            vel_int[0] += (vel_ref[0]-var_and_z_i_temp[10])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
-            vel_int[1] += (vel_ref[1]-var_and_z_i_temp[11])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
-            vel_int[2] += (vel_ref[2]-var_and_z_i_temp[12])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
-            vel_int[2] = fminf(fmaxf(vel_int[2], -CONST_PARAM_FLOAT::A_OF_GRAVITY), CONST_PARAM_FLOAT::A_OF_GRAVITY);
         }
 		return best_input_array.cost;
 	}
@@ -455,10 +419,10 @@ namespace qc_mcmpc
         }
 
 		// PIDカスケード用修正　入力：スラスト＋姿勢
-        optimal_input1 = (double)(best_input_array.decoupled_position[0][x]);
-        optimal_input2 = (double)(best_input_array.decoupled_position[0][y]);
-        optimal_input3 = (double)(best_input_array.decoupled_position[0][z]);
-        optimal_input4 = (double)(best_input_array.decoupled_position[0][yaw]);
+        optimal_input1 = (double)(best_input_array.decoupled_position[0][th]);
+        optimal_input2 = (double)(best_input_array.decoupled_position[0][wx]);
+        optimal_input3 = (double)(best_input_array.decoupled_position[0][wy]);
+        optimal_input4 = (double)(best_input_array.decoupled_position[0][wz]);
 
 		return min_cost;
 	}

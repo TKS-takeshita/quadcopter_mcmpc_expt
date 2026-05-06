@@ -110,11 +110,6 @@ namespace qc_mcmpc{
 
     extern void update_target_state_device();
 
-    static float prev_velocity_host[3] = {0.0f, 0.0f, 0.0f};
-    static float prev_acceleration_host[3] = {0.0f, 0.0f, 0.0f};
-    static float vel_int_host[3] = {0.0f, 0.0f, 0.0f};
-
-
     extern target_state_t target_host;
 
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
