@@ -199,6 +199,10 @@ void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
     }
     pre_stick_left = stick_left_button;
 
+    if (power_button){
+        kill_request = true;
+    }
+
     if (stick_right_button && !pre_stick_right) {
         target_yaw = wrap_pi(current_yaw - rotate_angle);
         float half_yaw = 0.5f * target_yaw;
@@ -422,7 +426,7 @@ int main(int argc, char *argv[])
         if (control_mode == ControlMode::PX4_POSITION) {
             ocm.position = true;
         } else {
-            ocm.body_rate = true;
+            ocm.attitude = true;
         }
         offboard_ctrl_pub->publish(ocm);
 
@@ -465,14 +469,15 @@ int main(int argc, char *argv[])
         // MCMPC角速度制御
         // ======================
         if (control_mode == ControlMode::MCMPC_ATTITUDE) {
-            px4_msgs::msg::VehicleRatesSetpoint sp{};
-            sp.timestamp     = node->get_clock()->now().nanoseconds() / 1000;
+            px4_msgs::msg::VehicleAttitudeSetpoint sp_att{};
+            sp_att.timestamp     = node->get_clock()->now().nanoseconds() / 1000;
             float thrust_ref = fmin(fmaxf(quad_sim_base::input1, 0.0f), CONST_PARAM_FLOAT::MAX_THRUST);
-            sp.thrust_body   = {0, 0, -thrust_ref/CONST_PARAM_FLOAT::MAX_THRUST};
-            sp.roll          = (float)quad_sim_base::input2;
-            sp.pitch         = (float)quad_sim_base::input3;
-            sp.yaw           = (float)quad_sim_base::input4;
-            rate_thrust_pub->publish(sp);
+            sp_att.thrust_body   = {0, 0, -thrust_ref/CONST_PARAM_FLOAT::MAX_THRUST};
+            sp_att.q_d[0] = sqrt(fmaxf(0.0f, 1.0 - quad_sim_base::input2*quad_sim_base::input2 - quad_sim_base::input3*quad_sim_base::input3 - quad_sim_base::input4*quad_sim_base::input4)); // MCMPCの結果
+            sp_att.q_d[1] = quad_sim_base::input2;
+            sp_att.q_d[2] = quad_sim_base::input3;
+            sp_att.q_d[3] = quad_sim_base::input4;
+            attitude_thrust_pub->publish(sp_att);
         }
         // csv保存用1stepあとの状態をシミュレーション
         verification_simulation_one_step(quad_sim_base::var_array_to_integrate, var_p_save, quad_sim_base::input1, quad_sim_base::input2, quad_sim_base::input3, quad_sim_base::input4);
@@ -542,10 +547,19 @@ void verification_simulation_one_step(float var_and_z_i_device[], float var_p_sa
     float var_p_temp[_N_OF_ODES];
     for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
     {
-        float thrust_ref  = decoupled_position[th];
-        float omega_x_ref = decoupled_position[wx];
-        float omega_y_ref = decoupled_position[wy];
-        float omega_z_ref = decoupled_position[wz];
+        float ref_th = fmaxf(0.0f, fminf(CONST_PARAM_FLOAT::MAX_THRUST, decoupled_position[th]));
+        float ref_qx = fmaxf(-1.0f, fminf(1.0f, decoupled_position[wx]));
+        float ref_qy = fmaxf(-1.0f, fminf(1.0f, decoupled_position[wy]));
+        float ref_qz = fmaxf(-1.0f, fminf(1.0f, decoupled_position[wz]));
+
+        float ref_qw = sqrtf(fmaxf(0.0f, 1.0f - ref_qx*ref_qx - ref_qy*ref_qy - ref_qz*ref_qz));
+        float qe0 =  var_p_save[i][0]*ref_qw + var_p_save[i][1]*ref_qx + var_p_save[i][2]*ref_qy + var_p_save[i][3]*ref_qz;
+        float sgn = (qe0 >= 0.0f) ? 1.0f : -1.0f;
+
+        float omega_x_ref = 2.0f * CONST_PARAM_FLOAT::MC_ROLL_P  * sgn * (var_and_z_i_temp[0]*ref_qx-var_and_z_i_temp[1]*ref_qw-var_and_z_i_temp[2]*ref_qz+var_and_z_i_temp[3]*ref_qy);
+        float omega_y_ref = 2.0f * CONST_PARAM_FLOAT::MC_PITCH_P * sgn * (var_and_z_i_temp[0]*ref_qy+var_and_z_i_temp[1]*ref_qz-var_and_z_i_temp[2]*ref_qw-var_and_z_i_temp[3]*ref_qx);
+        float omega_z_ref = 2.0f * CONST_PARAM_FLOAT::MC_YAW_P   * sgn * (var_and_z_i_temp[0]*ref_qz-var_and_z_i_temp[1]*ref_qy+var_and_z_i_temp[2]*ref_qx-var_and_z_i_temp[3]*ref_qw);
+        
         float tau         = 10.0f;
         float inv_mass = 1.0f / CONST_PARAM_FLOAT::MASS_OF_MACHINE;
         
@@ -570,9 +584,9 @@ void verification_simulation_one_step(float var_and_z_i_device[], float var_p_sa
             /* yp  */ var_p_save[i+1][8]  +=  var_p_temp[11] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
             /* zp  */ var_p_save[i+1][9]  +=  var_p_temp[12] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
 
-            /* xpp */ var_p_save[i+1][10] +=  (-thrust_ref) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[2] + 2.0f*var_p_temp[1]*var_p_temp[3])* CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
-            /* ypp */ var_p_save[i+1][11] += (-thrust_ref) * inv_mass * (2.0f*var_p_temp[2]*var_p_temp[3] - 2.0f*var_p_temp[0]*var_p_temp[1]) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
-            /* zpp */ var_p_save[i+1][12] += ((-thrust_ref) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[0] + 2.0f*var_p_temp[3]*var_p_temp[3] - 1.0f) + CONST_PARAM_FLOAT::A_OF_GRAVITY) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+            /* xpp */ var_p_save[i+1][10] +=  (-ref_th) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[2] + 2.0f*var_p_temp[1]*var_p_temp[3])* CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+            /* ypp */ var_p_save[i+1][11] += (-ref_th) * inv_mass * (2.0f*var_p_temp[2]*var_p_temp[3] - 2.0f*var_p_temp[0]*var_p_temp[1]) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+            /* zpp */ var_p_save[i+1][12] += ((-ref_th) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[0] + 2.0f*var_p_temp[3]*var_p_temp[3] - 1.0f) + CONST_PARAM_FLOAT::A_OF_GRAVITY) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
 
         }
         // コストの計算

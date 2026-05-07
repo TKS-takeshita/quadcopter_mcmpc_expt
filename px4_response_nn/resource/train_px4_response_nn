@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+
+import argparse
+from px4_response_nn.train import train
+
+parser = argparse.ArgumentParser()
+parser.add_argument("csv")
+parser.add_argument("--dt", type=float, default=0.02)
+
+args = parser.parse_args()
+
+train(args.csv, args.dt)

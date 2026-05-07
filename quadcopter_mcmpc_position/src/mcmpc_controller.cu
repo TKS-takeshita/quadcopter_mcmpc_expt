@@ -321,10 +321,23 @@ namespace qc_mcmpc
         for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
         {
 			// PIDカスケード用修正
-            float thrust_ref  = best_input_array.decoupled_position[i][th];
-            float omega_x_ref = best_input_array.decoupled_position[i][wx];
-            float omega_y_ref = best_input_array.decoupled_position[i][wy];
-            float omega_z_ref = best_input_array.decoupled_position[i][wz];
+            float ref_th = fmaxf(0.0f, fminf(CONST_PARAM_FLOAT::MAX_THRUST, best_input_array.decoupled_position[i][th]));
+            float ref_qx = fmaxf(-1.0f, fminf(1.0f, best_input_array.decoupled_position[i][wx]));
+            float ref_qy = fmaxf(-1.0f, fminf(1.0f, best_input_array.decoupled_position[i][wy]));
+            float ref_qz = fmaxf(-1.0f, fminf(1.0f, best_input_array.decoupled_position[i][wz]));
+            best_input_array.decoupled_position[i][th]  = ref_th;
+            best_input_array.decoupled_position[i][wx] = ref_qx;
+            best_input_array.decoupled_position[i][wy] = ref_qy;
+            best_input_array.decoupled_position[i][wz] = ref_qz;
+
+            float ref_qw = sqrtf(fmaxf(0.0f, 1.0f - ref_qx*ref_qx - ref_qy*ref_qy - ref_qz*ref_qz));
+            float qe0 =  var_and_z_i_temp[0]*ref_qw + var_and_z_i_temp[1]*ref_qx + var_and_z_i_temp[2]*ref_qy + var_and_z_i_temp[3]*ref_qz;
+            float sgn = (qe0 >= 0.0f) ? 1.0f : -1.0f;
+
+            float omega_x_ref = 2.0f * CONST_PARAM_FLOAT::MC_ROLL_P  * sgn * (var_and_z_i_temp[0]*ref_qx-var_and_z_i_temp[1]*ref_qw-var_and_z_i_temp[2]*ref_qz+var_and_z_i_temp[3]*ref_qy);
+            float omega_y_ref = 2.0f * CONST_PARAM_FLOAT::MC_PITCH_P * sgn * (var_and_z_i_temp[0]*ref_qy+var_and_z_i_temp[1]*ref_qz-var_and_z_i_temp[2]*ref_qw-var_and_z_i_temp[3]*ref_qx);
+            float omega_z_ref = 2.0f * CONST_PARAM_FLOAT::MC_YAW_P   * sgn * (var_and_z_i_temp[0]*ref_qz-var_and_z_i_temp[1]*ref_qy+var_and_z_i_temp[2]*ref_qx-var_and_z_i_temp[3]*ref_qw);
+            
             float tau         = 10.0f;
             float inv_mass = 1.0f / CONST_PARAM_FLOAT::MASS_OF_MACHINE;
             for ( float t = 0.0f; t < CONST_PARAM_FLOAT::CONTROL_PERIOD - CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE  / 2; t += CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE )
@@ -348,9 +361,9 @@ namespace qc_mcmpc
                 /* yp  */ var_and_z_i_temp[8]  +=  var_p_temp[11] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
                 /* zp  */ var_and_z_i_temp[9]  +=  var_p_temp[12] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
 
-                /* xpp */ var_and_z_i_temp[10] +=  (-thrust_ref) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[2] + 2.0f*var_p_temp[1]*var_p_temp[3])* CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
-                /* ypp */ var_and_z_i_temp[11] += (-thrust_ref) * inv_mass * (2.0f*var_p_temp[2]*var_p_temp[3] - 2.0f*var_p_temp[0]*var_p_temp[1]) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
-                /* zpp */ var_and_z_i_temp[12] += ((-thrust_ref) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[0] + 2.0f*var_p_temp[3]*var_p_temp[3] - 1.0f) + CONST_PARAM_FLOAT::A_OF_GRAVITY) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* xpp */ var_and_z_i_temp[10] +=  (-ref_th) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[2] + 2.0f*var_p_temp[1]*var_p_temp[3])* CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* ypp */ var_and_z_i_temp[11] += (-ref_th) * inv_mass * (2.0f*var_p_temp[2]*var_p_temp[3] - 2.0f*var_p_temp[0]*var_p_temp[1]) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
+                /* zpp */ var_and_z_i_temp[12] += ((-ref_th) * inv_mass * (2.0f*var_p_temp[0]*var_p_temp[0] + 2.0f*var_p_temp[3]*var_p_temp[3] - 1.0f) + CONST_PARAM_FLOAT::A_OF_GRAVITY) * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
 
                 /* z_i */ var_and_z_i_temp[_N_OF_ODES] += var_and_z_i_temp[9] * CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE ;
 
