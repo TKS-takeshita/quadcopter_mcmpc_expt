@@ -14,7 +14,7 @@ const double CONST_PARAM::ROTOR_DISTANCE  = 0.50; //m 向かい合うロータ�
 const double CONST_PARAM::MASS_OF_MACHINE = 2.35; // kg
 const double CONST_PARAM::MAX_RPS_POW     = CONST_PARAM::MAX_RPS * CONST_PARAM::MAX_RPS;
 
-const double CONST_PARAM::MAX_THRUST      = 53.6;      // N
+const double CONST_PARAM::MAX_THRUST      = 38.42;      // N
 const double CONST_PARAM::TORQUE_RATE     = 0.19 / CONST_PARAM::MAX_RPS / CONST_PARAM::MAX_RPS;      // N・m
 
 const double CONST_PARAM::INIT_U_THRUST   = 0.0;
@@ -26,7 +26,7 @@ const double CONST_PARAM::INIT_TARGET_E3  = 0.0;
 const double CONST_PARAM::INIT_TARGET_WX  = 0.0;
 const double CONST_PARAM::INIT_TARGET_WY  = 0.0;
 const double CONST_PARAM::INIT_TARGET_WZ  = 0.0;
-const double CONST_PARAM::INIT_TARGET_X   = 0.5;
+const double CONST_PARAM::INIT_TARGET_X   = 0.0;
 const double CONST_PARAM::INIT_TARGET_Y   = 0.0;
 const double CONST_PARAM::INIT_TARGET_Z   = -1.2;
 const double CONST_PARAM::INIT_TARGET_XP  = 0.0;
@@ -227,7 +227,7 @@ const float CONST_PARAM_FLOAT::COEFF_OF_REST        = (float)CONST_PARAM::COEFF_
 const float CONST_PARAM_FLOAT::CONTROL_PERIOD        = (float)CONST_PARAM::CONTROL_PERIOD;
 const float CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE = (float)CONST_PARAM::CONTROL_PERIOD / 2.0f;   // Set it to the 1/N value of CONTROL_PERIOD 
 
-const float CONST_PARAM_FLOAT::SIGMA_CONST[4] = {0.01f, 0.01f, 0.01f, 0.001f};
+const float CONST_PARAM_FLOAT::SIGMA_CONST[4] = {0.03f, 0.03f, 0.03f, 0.01f};
 
 #ifdef MCMPC_WITH_FORCE_STATE
     const float CONST_PARAM_FLOAT::INIT_TARGET_FX  = (float)CONST_PARAM::INIT_TARGET_FX;
