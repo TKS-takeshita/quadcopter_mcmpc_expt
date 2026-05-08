@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 from matplotlib.collections import LineCollection
 
-default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260508_064854.csv"
+# default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260508_064854.csv"
+default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_20260508_064854.csv"
 
 valid_states = [
     "e0","e1","e2","e3",
