@@ -720,19 +720,19 @@ void verification_simulation_one_step(float var_and_z_i_device[], float var_p_sa
         float yaw_ref = best_input.decoupled_position[i][yaw];
 
          // 目標速度
-        vel_setpoint[0] = mpc_xy_p * (best_input.decoupled_position[0][x] - var_and_z_i_temp[7]);
-        vel_setpoint[1] = mpc_xy_p * (best_input.decoupled_position[0][y] - var_and_z_i_temp[8]);
-        vel_setpoint[2] = mpc_z_p  * (best_input.decoupled_position[0][z] - var_and_z_i_temp[9]);
+        vel_setpoint[0] = mpc_xy_p * (best_input.decoupled_position[i][x] - var_p_save[i][7]);
+        vel_setpoint[1] = mpc_xy_p * (best_input.decoupled_position[i][y] - var_p_save[i][8]);
+        vel_setpoint[2] = mpc_z_p  * (best_input.decoupled_position[i][z] - var_p_save[i][9]);
         // 目標加速度
-        float vel_dot_x = (var_and_z_i_temp[10] - prev_vel[0]) / control_period_device;
-        float vel_dot_y = (var_and_z_i_temp[11] - prev_vel[1]) / control_period_device;
-        float vel_dot_z = (var_and_z_i_temp[12] - prev_vel[2]) / control_period_device;
+        float vel_dot_x = (var_p_save[i][10] - prev_vel[0]) / control_period_device;
+        float vel_dot_y = (var_p_save[i][11] - prev_vel[1]) / control_period_device;
+        float vel_dot_z = (var_p_save[i][12] - prev_vel[2]) / control_period_device;
         // acc_setpoint[0]= mpc_xy_vel_p_acc*(vel_setpoint[0]-var_and_z_i_temp[10])+mpc_xy_vel_i_acc*vel_int[0]-CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC*(prev_acc[0]+CONST_PARAM_FLOAT::LPF*(vel_dot_x-prev_acc[0]));
         // acc_setpoint[1]= mpc_xy_vel_p_acc*(vel_setpoint[1]-var_and_z_i_temp[11])+mpc_xy_vel_i_acc*vel_int[1]-CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC*(prev_acc[1]+CONST_PARAM_FLOAT::LPF*(vel_dot_y-prev_acc[1]));
         // acc_setpoint[2]= mpc_z_vel_p_acc* (vel_setpoint[2]-var_and_z_i_temp[12])+mpc_z_vel_i_acc*vel_int[2]-CONST_PARAM_FLOAT::MPC_Z_VEL_D_ACC *(prev_acc[2]+CONST_PARAM_FLOAT::LPF*(vel_dot_z-prev_acc[2]));
-        acc_setpoint[0]= mpc_xy_vel_p_acc*(vel_setpoint[0]-var_and_z_i_temp[10]);
-        acc_setpoint[1]= mpc_xy_vel_p_acc*(vel_setpoint[1]-var_and_z_i_temp[11])+mpc_xy_vel_i_acc*vel_int[1]-CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC*(prev_acc[1]+CONST_PARAM_FLOAT::LPF*(vel_dot_y-prev_acc[1]));
-        acc_setpoint[2]= mpc_z_vel_p_acc* (vel_setpoint[2]-var_and_z_i_temp[12]);
+        acc_setpoint[0]= mpc_xy_vel_p_acc*(vel_setpoint[0]-var_p_save[i][10]);
+        acc_setpoint[1]= mpc_xy_vel_p_acc*(vel_setpoint[1]-var_p_save[i][11])+mpc_xy_vel_i_acc*vel_int[1]-CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC*(prev_acc[1]+CONST_PARAM_FLOAT::LPF*(vel_dot_y-prev_acc[1]));
+        acc_setpoint[2]= mpc_z_vel_p_acc* (vel_setpoint[2]-var_p_save[i][12]);
             
         /*目標姿勢*/
         float body_z[3];
@@ -779,12 +779,12 @@ void verification_simulation_one_step(float var_and_z_i_device[], float var_p_sa
         att_setpoint[1]        = (body_y[2] - body_z[1]) / four_qw;
         att_setpoint[2]        = (body_z[0] - body_x[2]) / four_qw;
         att_setpoint[3]        = (body_x[1] - body_y[0]) / four_qw;
-        float qe0 =  var_and_z_i_temp[0]*att_setpoint[0] + var_and_z_i_temp[1]*att_setpoint[1] + var_and_z_i_temp[2]*att_setpoint[2] + var_and_z_i_temp[3]*att_setpoint[3];
+        float qe0 =  var_p_save[i][0]*att_setpoint[0] + var_p_save[i][1]*att_setpoint[1] + var_p_save[i][2]*att_setpoint[2] + var_p_save[i][3]*att_setpoint[3];
         float sgn = (qe0 >= 0.0f) ? 1.0f : -1.0f;
         
-        omega_setpoint[0]  = 2.0f*mc_roll_p *sgn * (var_and_z_i_temp[0]*att_setpoint[1]-var_and_z_i_temp[1]*att_setpoint[0]-var_and_z_i_temp[2]*att_setpoint[3]+var_and_z_i_temp[3]*att_setpoint[2]);
-        omega_setpoint[1]  = 2.0f*mc_pitch_p*sgn * (var_and_z_i_temp[0]*att_setpoint[2]+var_and_z_i_temp[1]*att_setpoint[3]-var_and_z_i_temp[2]*att_setpoint[0]-var_and_z_i_temp[3]*att_setpoint[1]);
-        omega_setpoint[2]  = 2.0f*mc_yaw_p  *sgn * (var_and_z_i_temp[0]*att_setpoint[3]-var_and_z_i_temp[1]*att_setpoint[2]+var_and_z_i_temp[2]*att_setpoint[1]-var_and_z_i_temp[3]*att_setpoint[0]);
+        omega_setpoint[0]  = 2.0f*mc_roll_p *sgn * (var_and_z_i_temp[0]*att_setpoint[1]-var_p_save[i][1]*att_setpoint[0]-var_p_save[i][2]*att_setpoint[3]+var_p_save[i][3]*att_setpoint[2]);
+        omega_setpoint[1]  = 2.0f*mc_pitch_p*sgn * (var_and_z_i_temp[0]*att_setpoint[2]+var_p_save[i][1]*att_setpoint[3]-var_p_save[i][2]*att_setpoint[0]-var_p_save[i][3]*att_setpoint[1]);
+        omega_setpoint[2]  = 2.0f*mc_yaw_p  *sgn * (var_and_z_i_temp[0]*att_setpoint[3]-var_p_save[i][1]*att_setpoint[2]+var_p_save[i][2]*att_setpoint[1]-var_p_save[i][3]*att_setpoint[0]);
 
             
         float inv_mass = 1.0f / mass_of_machine_device;

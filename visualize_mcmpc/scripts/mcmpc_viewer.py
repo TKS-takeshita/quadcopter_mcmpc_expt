@@ -6,7 +6,7 @@ from matplotlib.widgets import Slider
 from matplotlib.collections import LineCollection
 
 # default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260508_064854.csv"
-default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_20260508_064854.csv"
+default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_20260508_134527.csv"
 
 valid_states = [
     "e0","e1","e2","e3",
@@ -177,6 +177,7 @@ elif state.startswith("att_sp_"):
         f"calc_att_sp_{axis}",
         f"topic_att_sp_{axis}",
     )
+
 # =========================
 # rate setpoint
 # =========================
@@ -230,7 +231,7 @@ elif state == "yaw":
             t_cur,
             yaw_cur,
             color="blue",
-            linewidth=2,
+            linewidth=3,
             label="cur_yaw",
         )
 
@@ -260,7 +261,7 @@ else:
     plot_col(
         cur_col,
         color="blue",
-        linewidth=2,
+        linewidth=3,
         label=cur_col,
     )
 
@@ -307,7 +308,8 @@ else:
                 df["t_pred_1"],
                 df[f"1{state}"],
                 color="red",
-                linewidth=2,
+                linewidth=1.0,
+                alpha=0.25,
                 label="1step",
             )
 
@@ -316,7 +318,17 @@ else:
             segments = []
             colors = []
 
+            display_interval = 1.0
+            last_display_time = -1e9
+
             for i in range(len(df)):
+
+                current_time = df.loc[i, "t"]
+
+                if current_time - last_display_time < display_interval:
+                    continue
+
+                last_display_time = current_time
 
                 xs = np.concatenate((
                     [df.loc[i, "t"]],
@@ -330,19 +342,17 @@ else:
 
                 segments.append(np.column_stack([xs, ys]))
 
-                alpha = 0.05 + 0.75 * (i / max(1, len(df)-1))
-
-                colors.append((1, 0, 0, alpha))
+                colors.append((1, 0, 0, 1.0))
 
             lc = LineCollection(
                 segments,
                 colors=colors,
-                linewidths=1.0,
+                linewidths=2.5,
             )
 
             ax.add_collection(lc)
 
-            ax.plot([], [], color="red", label="pred")
+            ax.plot([], [], color="red", alpha=1.0, linewidth=2.5, label="pred")
 
 # =========================
 # axes
@@ -354,7 +364,7 @@ ax.set_title(state)
 ax.set_xlabel("time")
 
 ax.grid()
-ax.legend()
+ax.legend(fontsize=16)
 
 ax.relim()
 ax.autoscale_view()
@@ -432,6 +442,91 @@ def on_scroll(event):
     window_width[0] *= scale
 
     set_xlim(time_slider.val)
+
+# =========================
+# keyboard control
+# =========================
+def on_key(event):
+
+    # =====================
+    # x move
+    # =====================
+    if event.key == "a":
+
+        new_center = time_slider.val - window_width[0] * 0.1
+
+        time_slider.set_val(new_center)
+
+    elif event.key == "d":
+
+        new_center = time_slider.val + window_width[0] * 0.1
+
+        time_slider.set_val(new_center)
+
+    # =====================
+    # x zoom
+    # =====================
+    elif event.key == "w":
+
+        window_width[0] *= 0.8
+
+        set_xlim(time_slider.val)
+
+    elif event.key == "p":
+
+        window_width[0] *= 1.25
+
+        set_xlim(time_slider.val)
+
+    # =====================
+    # y move
+    # =====================
+    elif event.key == "j":
+
+        new_center = y_slider.val - y_height[0] * 0.1
+
+        y_slider.set_val(new_center)
+
+    elif event.key == "l":
+
+        new_center = y_slider.val + y_height[0] * 0.1
+
+        y_slider.set_val(new_center)
+
+    # =====================
+    # y zoom
+    # =====================
+    elif event.key == "i":
+
+        y_height[0] *= 0.8
+
+        set_ylim(y_slider.val)
+
+    elif event.key == "k":
+
+        y_height[0] *= 1.25
+
+        set_ylim(y_slider.val)
+
+    # =====================
+    # reset
+    # =====================
+    elif event.key == "r":
+
+        window_width[0] = init_width
+
+        y_height[0] = ymax - ymin
+
+        time_slider.set_val(t_min + init_width / 2)
+
+        y_slider.set_val(0.5 * (ymin + ymax))
+
+        set_xlim(time_slider.val)
+
+        set_ylim(y_slider.val)
+
+# connect
+fig.canvas.mpl_connect("key_press_event", on_key)
 
 time_slider.on_changed(lambda v: set_xlim(v))
 y_slider.on_changed(lambda v: set_ylim(v))
