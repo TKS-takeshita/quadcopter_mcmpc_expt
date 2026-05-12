@@ -6,7 +6,7 @@ from matplotlib.widgets import Slider
 from matplotlib.collections import LineCollection
 
 # default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260508_064854.csv"
-default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_20260508_134527.csv"
+default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_20260513_074656.csv"
 
 valid_states = [
     "e0","e1","e2","e3",
@@ -319,7 +319,7 @@ else:
             colors = []
 
             display_interval = 1.0
-            last_display_time = -1e9
+            last_display_time = -0.5
 
             for i in range(len(df)):
 
