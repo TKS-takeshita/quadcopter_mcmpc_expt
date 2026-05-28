@@ -239,9 +239,18 @@ void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
 
     if (target_changed) {
         qc_mcmpc::update_target_state_device();
+
+        qc_mcmpc::mcmpc_controller::get_instance()
+            .reset_input_to_target(
+                target_host.x,
+                target_host.y,
+                target_host.z,
+                target_yaw
+            );
+
         RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
-            "target copied to device: x=%f y=%f z=%f",
-            target_host.x, target_host.y, target_host.z);
+            "target copied and average input reset: x=%f y=%f z=%f yaw=%f",
+            target_host.x, target_host.y, target_host.z, target_yaw);
     }
 }
 
@@ -286,8 +295,6 @@ void rates_setpoint_callback(
     latest_rate_sp = *msg;
     has_rate_sp = true;
 }
-
-void verification_simulation_one_step(float var_and_z_i_device[], float var_p_save[_DEVICE_CONST_HORIZON + 1][_N_OF_ODES+1], input_array best_input);
 
 namespace quad_sim_base
 {
@@ -344,25 +351,6 @@ namespace quad_sim_base
         float roll_deg  = roll  * (180.0 / M_PI);
         float pitch_deg = pitch * (180.0 / M_PI);
         float yaw_deg   = yaw   * (180.0 / M_PI);
-        // printf("%.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f\n",
-        //        cnt*0.02f,
-        //        quad_sim_base::var_array_to_integrate[0],
-        //        quad_sim_base::var_array_to_integrate[1],
-        //        quad_sim_base::var_array_to_integrate[2],
-        //        quad_sim_base::var_array_to_integrate[3],
-        //        quad_sim_base::var_array_to_integrate[4] * (180.0 / M_PI),
-        //        quad_sim_base::var_array_to_integrate[5] * (180.0 / M_PI),
-        //        quad_sim_base::var_array_to_integrate[6] * (180.0 / M_PI),
-        //        quad_sim_base::var_array_to_integrate[7],
-        //        quad_sim_base::var_array_to_integrate[8],
-        //        quad_sim_base::var_array_to_integrate[9],
-        //        quad_sim_base::var_array_to_integrate[10],
-        //        quad_sim_base::var_array_to_integrate[11],
-        //        quad_sim_base::var_array_to_integrate[12],
-        //        roll_deg, pitch_deg, yaw_deg,
-        //        quad_sim_base::input1, quad_sim_base::input1/CONST_PARAM::MAX_THRUST,
-        //        quad_sim_base::input2, quad_sim_base::input3, quad_sim_base::input4
-        //        );
     }
 }
 
@@ -408,8 +396,8 @@ int main(int argc, char *argv[])
             var_p_save[i][j] = 0.0f;
         }
     }
-    csv.open(("/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_" + ([](){auto n=std::chrono::system_clock::now();std::time_t t=std::chrono::system_clock::to_time_t(n);std::tm tm;localtime_r(&t,&tm);std::ostringstream s;s<<std::put_time(&tm,"%Y%m%d_%H%M%S");return s.str();})() + ".csv"), std::ios::out);
-    // csv.open(("/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_" + ([](){auto n=std::chrono::system_clock::now();std::time_t t=std::chrono::system_clock::to_time_t(n);std::tm tm;localtime_r(&t,&tm);std::ostringstream s;s<<std::put_time(&tm,"%Y%m%d_%H%M%S");return s.str();})() + ".csv"), std::ios::out);
+    // csv.open(("/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_" + ([](){auto n=std::chrono::system_clock::now();std::time_t t=std::chrono::system_clock::to_time_t(n);std::tm tm;localtime_r(&t,&tm);std::ostringstream s;s<<std::put_time(&tm,"%Y%m%d_%H%M%S");return s.str();})() + ".csv"), std::ios::out);
+    csv.open(("/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_" + ([](){auto n=std::chrono::system_clock::now();std::time_t t=std::chrono::system_clock::to_time_t(n);std::tm tm;localtime_r(&t,&tm);std::ostringstream s;s<<std::put_time(&tm,"%Y%m%d_%H%M%S");return s.str();})() + ".csv"), std::ios::out);
     const char* names[_N_OF_ODES] = {
         "e0","e1","e2","e3",
         "wx","wy","wz",
@@ -422,33 +410,18 @@ int main(int argc, char *argv[])
         csv << ",cur_" << names[j];
     }
     // 入力
-    csv << ",input_1,input_2,input_3,input_4";
-    // setpoint
-    csv << ",calc_vel_sp_x,calc_vel_sp_y,calc_vel_sp_z";
-    csv << ",calc_acc_sp_x,calc_acc_sp_y,calc_acc_sp_z";
-    csv << ",calc_thrust_sp_x,calc_thrust_sp_y,calc_thrust_sp_z";
-    csv << ",calc_att_sp_w,calc_att_sp_x,calc_att_sp_y,calc_att_sp_z";
-    csv << ",calc_rate_sp_x,calc_rate_sp_y,calc_rate_sp_z";
-
-    csv << ",topic_pos_sp_x,topic_pos_sp_y,topic_pos_sp_z";
-    csv << ",topic_vel_sp_x,topic_vel_sp_y,topic_vel_sp_z";
-    csv << ",topic_acc_sp_x,topic_acc_sp_y,topic_acc_sp_z";
-    csv << ",topic_yaw_sp,topic_yawspeed_sp";
-    csv << ",topic_att_sp_w,topic_att_sp_x,topic_att_sp_y,topic_att_sp_z";
-    csv << ",topic_thrust_sp_x,topic_thrust_sp_y,topic_thrust_sp_z";
-    csv << ",topic_rate_sp_x,topic_rate_sp_y,topic_rate_sp_z";
-    csv << ",topic_rate_thrust_x,topic_rate_thrust_y,topic_rate_thrust_z";
+    for (int h = 0; h < _DEVICE_CONST_HORIZON; h++) {
+        csv << ",u" << h << "_x,u" << h << "_y,u" << h << "_z,u" << h << "_yaw";
+    }
     // 目標位置
     csv << ",target_x,target_y,target_z";
-    // horizon予測（1ステップ先から）
-    for (int h = 1; h <= _DEVICE_CONST_HORIZON; h++) {
-        csv << ",t_pred_" << h;
 
-        for (int j = 0; j < _N_OF_ODES; j++) {
-            csv << "," << h << names[j];  // ← 1e0,1e1,...2e0,...
-        }
-    }
-    csv << ",cost";
+    csv << ",px4_sp_vx,px4_sp_vy,px4_sp_vz";
+    csv << ",px4_sp_acc_x,px4_sp_acc_y,px4_sp_acc_z";
+    csv << ",px4_sp_q0,px4_sp_q1,px4_sp_q2,px4_sp_q3";
+    csv << ",px4_sp_roll_rate,px4_sp_pitch_rate,px4_sp_yaw_rate";
+    csv << ",px4_sp_thrust_x,px4_sp_thrust_y,px4_sp_thrust_z";
+
     csv << "\n";
     rclcpp::Rate rate(50);
     
@@ -557,13 +530,12 @@ int main(int argc, char *argv[])
         // csv保存用1stepあとの状態をシミュレーション
         qc_mcmpc::input_array best_input;
         qc_mcmpc::mcmpc_controller::get_instance().copy_best_input_array(best_input);
-        verification_simulation_one_step(quad_sim_base::var_array_to_integrate, var_p_save, best_input);
         for(int i=0;i<3;i++){
             prev_velocity_host[i] = quad_sim_base::var_array_to_integrate[i+10];
             prev_acceleration_host[i] = acc_now[i];
         }
-        vel_int_host[0] += (vel_ref[0] - quad_sim_base::var_array_to_integrate[10] - CONST_PARAM_FLOAT::ARW_GAIN*(a_ref[0]-acc_now[0])) * CONST_PARAM_FLOAT::CONTROL_PERIOD;
-        vel_int_host[1] += (vel_ref[1] - quad_sim_base::var_array_to_integrate[11] - CONST_PARAM_FLOAT::ARW_GAIN*(a_ref[1]-acc_now[1])) * CONST_PARAM_FLOAT::CONTROL_PERIOD;
+        vel_int_host[0] += (vel_ref[0] - quad_sim_base::var_array_to_integrate[10]) * CONST_PARAM_FLOAT::CONTROL_PERIOD;
+        vel_int_host[1] += (vel_ref[1] - quad_sim_base::var_array_to_integrate[11]) * CONST_PARAM_FLOAT::CONTROL_PERIOD;
         vel_int_host[2] += (vel_ref[2] - quad_sim_base::var_array_to_integrate[12]) * CONST_PARAM_FLOAT::CONTROL_PERIOD;
         vel_int_host[2] =  fminf(fmaxf(vel_int_host[2], -CONST_PARAM_FLOAT::A_OF_GRAVITY), CONST_PARAM_FLOAT::A_OF_GRAVITY);
         cudaMemcpyToSymbol(qc_mcmpc::prev_velocity_device, prev_velocity_host, 3*sizeof(float));
@@ -572,52 +544,30 @@ int main(int argc, char *argv[])
         csv << mcmpc_log;
         // 現在状態（左）
         for(int i=0;i<_N_OF_ODES;i++){
-            csv << "," << var_p_save[0][i];
+            csv << "," << quad_sim_base::var_array_to_integrate[i];
         }
-        // 入力
-        csv << "," << quad_sim_base::input1 << "," << quad_sim_base::input2 << "," << quad_sim_base::input3 << "," << quad_sim_base::input4;
-        
+
+        for (int h = 0; h < _DEVICE_CONST_HORIZON; h++) {
+            csv << "," << best_input.decoupled_position[h][x]
+                << "," << best_input.decoupled_position[h][y]
+                << "," << best_input.decoupled_position[h][z]
+                << "," << best_input.decoupled_position[h][yaw];
+        }
+
+        csv << "," << target_host.x << "," << target_host.y << "," << target_host.z;
+
         {
-            std::lock_guard<std::mutex> lock(sp_mutex);
-
-            csv << "," << vel_setpoint[0]
-                << "," << vel_setpoint[1]
-                << "," << vel_setpoint[2];
-
-            csv << "," << acc_setpoint[0]
-                << "," << acc_setpoint[1]
-                << "," << acc_setpoint[2];
-
-            csv << "," << thrust_setpoint[0]
-                << "," << thrust_setpoint[1]
-                << "," << thrust_setpoint[2];
-
-            csv << "," << att_setpoint[0]
-                << "," << att_setpoint[1]
-                << "," << att_setpoint[2]
-                << "," << att_setpoint[3];
-
-            csv << "," << omega_setpoint[0]
-                << "," << omega_setpoint[1]
-                << "," << omega_setpoint[2];
+            std::lock_guard<std::mutex> sp_lock(sp_mutex);
 
             if (has_traj_sp) {
-                csv << "," << latest_traj_sp.x
-                    << "," << latest_traj_sp.y
-                    << "," << latest_traj_sp.z;
-
                 csv << "," << latest_traj_sp.vx
                     << "," << latest_traj_sp.vy
-                    << "," << latest_traj_sp.vz;
-
-                csv << "," << latest_traj_sp.acceleration[0]
+                    << "," << latest_traj_sp.vz
+                    << "," << latest_traj_sp.acceleration[0]
                     << "," << latest_traj_sp.acceleration[1]
                     << "," << latest_traj_sp.acceleration[2];
-
-                csv << "," << latest_traj_sp.yaw
-                    << "," << latest_traj_sp.yawspeed;
             } else {
-                csv << ",nan,nan,nan,nan,nan,nan,nan,nan,nan,nan,nan";
+                csv << ",nan,nan,nan,nan,nan,nan";
             }
 
             if (has_att_sp) {
@@ -625,37 +575,22 @@ int main(int argc, char *argv[])
                     << "," << latest_att_sp.q_d[1]
                     << "," << latest_att_sp.q_d[2]
                     << "," << latest_att_sp.q_d[3];
-
-                csv << "," << latest_att_sp.thrust_body[0]
-                    << "," << latest_att_sp.thrust_body[1]
-                    << "," << latest_att_sp.thrust_body[2];
             } else {
-                csv << ",nan,nan,nan,nan,nan,nan,nan";
+                csv << ",nan,nan,nan,nan";
             }
 
             if (has_rate_sp) {
                 csv << "," << latest_rate_sp.roll
                     << "," << latest_rate_sp.pitch
-                    << "," << latest_rate_sp.yaw;
-
-                csv << "," << latest_rate_sp.thrust_body[0]
+                    << "," << latest_rate_sp.yaw
+                    << "," << latest_rate_sp.thrust_body[0]
                     << "," << latest_rate_sp.thrust_body[1]
                     << "," << latest_rate_sp.thrust_body[2];
             } else {
                 csv << ",nan,nan,nan,nan,nan,nan";
             }
         }
-        // 目標位置
-        csv << "," << target_host.x << "," << target_host.y << "," << target_host.z;
-        // 予測状態（右)
-        for(int i=1;i<_DEVICE_CONST_HORIZON+1;i++){
-            // 予測時刻
-            csv << "," << (mcmpc_log + 0.02*i);
-            for(int j=0;j<_N_OF_ODES;j++){
-                csv << "," << var_p_save[i][j];
-            }
-        }
-        csv << "," << cost;
+
         csv << "\n";
         mcmpc_log +=0.02;
         rate.sleep();
@@ -664,182 +599,3 @@ int main(int argc, char *argv[])
     rclcpp::shutdown();
     return 0;
 }
-
-void verification_simulation_one_step(float var_and_z_i_device[], float var_p_save[_DEVICE_CONST_HORIZON + 1][_N_OF_ODES+1], input_array best_input){
-
-    float control_period_device        = (float)CONST_PARAM::CONTROL_PERIOD;
-    float integration_step_size_device = (float)CONST_PARAM::CONTROL_PERIOD / 2.0f;
-    float mass_of_machine_device       = (float)CONST_PARAM::MASS_OF_MACHINE;
-    float a_of_gravity_device          = (float)CONST_PARAM::A_OF_GRAVITY;
-    float max_thrust_device            = (float)CONST_PARAM::MAX_THRUST;
-    float mpc_xy_p                     = CONST_PARAM_FLOAT::MPC_XY_P;
-    float mpc_z_p                      = CONST_PARAM_FLOAT::MPC_Z_P;
-    float mpc_xy_vel_p_acc             = CONST_PARAM_FLOAT::MPC_XY_VEL_P_ACC;
-    float mpc_z_vel_p_acc              = CONST_PARAM_FLOAT::MPC_Z_VEL_P_ACC;
-    float mpc_xy_vel_i_acc             = CONST_PARAM_FLOAT::MPC_XY_VEL_I_ACC;
-    float mpc_z_vel_i_acc              = CONST_PARAM_FLOAT::MPC_Z_VEL_I_ACC;
-    float mc_roll_p                    = CONST_PARAM_FLOAT::MC_ROLL_P;
-    float mc_pitch_p                   = CONST_PARAM_FLOAT::MC_PITCH_P;
-    float mc_yaw_p                     = CONST_PARAM_FLOAT::MC_YAW_P;
-    cost =0.0f;
-    for(int j=0; j<_N_OF_ODES; j++){
-        var_p_save[0][j] = var_and_z_i_device[j];
-    }
-    for (int i = 1; i < _DEVICE_CONST_HORIZON + 1; i++) {
-        for (int j = 0; j < _N_OF_ODES; j++) {
-            var_p_save[i][j] = 0.0f;
-        }
-    }
-
-    // __constant__ メモリから状態量をコピー
-    float var_and_z_i_temp[_N_OF_ODES + 1];
-    for ( int i = 0; i < _N_OF_ODES + 1; i++ )
-        var_and_z_i_temp[i] = var_and_z_i_device[i];
-    
-    float var_p_temp[_N_OF_ODES];
-    float prev_vel[3];
-    prev_vel[0] = prev_velocity_host[0];
-    prev_vel[1] = prev_velocity_host[1];
-    prev_vel[2] = prev_velocity_host[2];
-    // 前時刻までの誤差の積分値
-    float vel_int[3];
-    vel_int[0] = vel_int_host[0];
-    vel_int[1] = vel_int_host[1];
-    vel_int[2] = vel_int_host[2];
-    float prev_acc[3];
-    prev_acc[0] = prev_acceleration_host[0];
-    prev_acc[1] = prev_acceleration_host[1];
-    prev_acc[2] = prev_acceleration_host[2];
-   
-    
-    for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
-    {
-        float x_ref   = best_input.decoupled_position[i][x];
-        float y_ref   = best_input.decoupled_position[i][y];
-        float z_ref   = best_input.decoupled_position[i][z];
-        float yaw_ref = best_input.decoupled_position[i][yaw];
-
-         // 目標速度
-        vel_setpoint[0] = mpc_xy_p * (best_input.decoupled_position[i][x] - var_p_save[i][7]);
-        vel_setpoint[1] = mpc_xy_p * (best_input.decoupled_position[i][y] - var_p_save[i][8]);
-        vel_setpoint[2] = mpc_z_p  * (best_input.decoupled_position[i][z] - var_p_save[i][9]);
-        // 目標加速度
-        float vel_dot_x = (var_p_save[i][10] - prev_vel[0]) / control_period_device;
-        float vel_dot_y = (var_p_save[i][11] - prev_vel[1]) / control_period_device;
-        float vel_dot_z = (var_p_save[i][12] - prev_vel[2]) / control_period_device;
-        // acc_setpoint[0]= mpc_xy_vel_p_acc*(vel_setpoint[0]-var_and_z_i_temp[10])+mpc_xy_vel_i_acc*vel_int[0]-CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC*(prev_acc[0]+CONST_PARAM_FLOAT::LPF*(vel_dot_x-prev_acc[0]));
-        // acc_setpoint[1]= mpc_xy_vel_p_acc*(vel_setpoint[1]-var_and_z_i_temp[11])+mpc_xy_vel_i_acc*vel_int[1]-CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC*(prev_acc[1]+CONST_PARAM_FLOAT::LPF*(vel_dot_y-prev_acc[1]));
-        // acc_setpoint[2]= mpc_z_vel_p_acc* (vel_setpoint[2]-var_and_z_i_temp[12])+mpc_z_vel_i_acc*vel_int[2]-CONST_PARAM_FLOAT::MPC_Z_VEL_D_ACC *(prev_acc[2]+CONST_PARAM_FLOAT::LPF*(vel_dot_z-prev_acc[2]));
-        acc_setpoint[0]= mpc_xy_vel_p_acc*(vel_setpoint[0]-var_p_save[i][10]);
-        acc_setpoint[1]= mpc_xy_vel_p_acc*(vel_setpoint[1]-var_p_save[i][11])+mpc_xy_vel_i_acc*vel_int[1]-CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC*(prev_acc[1]+CONST_PARAM_FLOAT::LPF*(vel_dot_y-prev_acc[1]));
-        acc_setpoint[2]= mpc_z_vel_p_acc* (vel_setpoint[2]-var_p_save[i][12]);
-            
-        /*目標姿勢*/
-        float body_z[3];
-        body_z[0]     = -acc_setpoint[0];
-        body_z[1]     = -acc_setpoint[1];
-        body_z[2]     = a_of_gravity_device - acc_setpoint[2];
-        float bz_norm_inv = rsqrtf(body_z[0]*body_z[0]+body_z[1]*body_z[1]+body_z[2]*body_z[2]);
-        body_z[0]    *= bz_norm_inv;
-        body_z[1]    *= bz_norm_inv;
-        body_z[2]    *= bz_norm_inv;
-
-        thrust_setpoint[2] = (acc_setpoint[2]-a_of_gravity_device)*CONST_PARAM_FLOAT::MPC_THR_HOVER/a_of_gravity_device/CONST_PARAM_FLOAT::MAX_THRUST;
-        float thrust_ref = thrust_setpoint[2]/(body_z[2]);
-        thrust_setpoint[0] = body_z[0]*thrust_ref;
-        thrust_setpoint[1] = body_z[1]*thrust_ref;
-        float acc_produced[3];
-        acc_produced[0] = a_of_gravity_device*thrust_setpoint[0]/CONST_PARAM_FLOAT::MPC_THR_HOVER;
-        acc_produced[1] = a_of_gravity_device*thrust_setpoint[1]/CONST_PARAM_FLOAT::MPC_THR_HOVER;
-
-        float yaw_now = arctan2f(2.0f*(var_and_z_i_temp[0]*var_and_z_i_temp[3]+var_and_z_i_temp[1]*var_and_z_i_temp[2]), var_and_z_i_temp[0]*var_and_z_i_temp[0]+var_and_z_i_temp[1]*var_and_z_i_temp[1]-var_and_z_i_temp[2]*var_and_z_i_temp[2]-var_and_z_i_temp[3]*var_and_z_i_temp[3]);
-        float yaw_err = best_input.decoupled_position[0][yaw] - yaw_now;
-        if(yaw_err>M_PI)
-            yaw_err  -= 2.0f*M_PI;
-        else if(yaw_err<-M_PI)
-            yaw_err  += 2.0f*M_PI;
-        float yaw_ref_eff = yaw_now + CONST_PARAM_FLOAT::MC_YAW_WEIGHT*yaw_err;
-        float sy, cy;
-        sin_cosf(yaw_ref_eff, &sy, &cy);
-        float y_c[3]  = {-sy, cy, 0.0f};
-        float body_x[3];
-        float body_y[3];
-        body_x[0]       =  y_c[1]*body_z[2];
-        body_x[1]       = -y_c[0]*body_z[2];
-        body_x[2]       = y_c[0] *body_z[1]-y_c[1]*body_z[0];
-        float bx_norm_inv = rsqrtf(body_x[0]*body_x[0]+body_x[1]*body_x[1]+body_x[2]*body_x[2]);
-        body_x[0]      *= bx_norm_inv;
-        body_x[1]      *= bx_norm_inv;
-        body_x[2]      *= bx_norm_inv;
-        body_y[0]       = body_z[1]*body_x[2] - body_z[2]*body_x[1];
-        body_y[1]       = body_z[2]*body_x[0] - body_z[0]*body_x[2];
-        body_y[2]       = body_z[0]*body_x[1] - body_z[1]*body_x[0];
-        float four_qw   = sqrtf(body_x[0] + body_y[1] + body_z[2] + 1.0f)*2.0f;
-        att_setpoint[0]        = 0.25 * four_qw;
-        att_setpoint[1]        = (body_y[2] - body_z[1]) / four_qw;
-        att_setpoint[2]        = (body_z[0] - body_x[2]) / four_qw;
-        att_setpoint[3]        = (body_x[1] - body_y[0]) / four_qw;
-        float qe0 =  var_p_save[i][0]*att_setpoint[0] + var_p_save[i][1]*att_setpoint[1] + var_p_save[i][2]*att_setpoint[2] + var_p_save[i][3]*att_setpoint[3];
-        float sgn = (qe0 >= 0.0f) ? 1.0f : -1.0f;
-        
-        omega_setpoint[0]  = 2.0f*mc_roll_p *sgn * (var_and_z_i_temp[0]*att_setpoint[1]-var_p_save[i][1]*att_setpoint[0]-var_p_save[i][2]*att_setpoint[3]+var_p_save[i][3]*att_setpoint[2]);
-        omega_setpoint[1]  = 2.0f*mc_pitch_p*sgn * (var_and_z_i_temp[0]*att_setpoint[2]+var_p_save[i][1]*att_setpoint[3]-var_p_save[i][2]*att_setpoint[0]-var_p_save[i][3]*att_setpoint[1]);
-        omega_setpoint[2]  = 2.0f*mc_yaw_p  *sgn * (var_and_z_i_temp[0]*att_setpoint[3]-var_p_save[i][1]*att_setpoint[2]+var_p_save[i][2]*att_setpoint[1]-var_p_save[i][3]*att_setpoint[0]);
-
-            
-        float inv_mass = 1.0f / mass_of_machine_device;
-        for ( float t = 0.0f; t < CONST_PARAM_FLOAT::CONTROL_PERIOD - integration_step_size_device / 2; t += integration_step_size_device ){
-            // PX4のPIDを素に速度, 加速度, 姿勢, スラスト, 角速度を導出
-            for ( int k = 0; k < _N_OF_ODES; k++ ) var_p_temp[k] = var_p_save[i][k];
-
-            /* xp  */ var_p_save[i+1][7]  = var_p_temp[7] + var_p_temp[10] * integration_step_size_device;
-            /* yp  */ var_p_save[i+1][8]  = var_p_temp[8] + var_p_temp[11] * integration_step_size_device;
-            /* zp  */ var_p_save[i+1][9]  = var_p_temp[9] + var_p_temp[12] * integration_step_size_device;
-
-            /* xpp */ var_p_save[i+1][10] = var_p_temp[10] + acc_setpoint[0] * integration_step_size_device;
-            /* ypp */ var_p_save[i+1][11] = var_p_temp[11] + acc_setpoint[1] * integration_step_size_device;
-            /* zpp */ var_p_save[i+1][12] = var_p_temp[12] + acc_setpoint[2] * integration_step_size_device;
-
-            // /* e0p */ var_p_save[i+1][0]  = var_p_temp[0] + (-0.5f*var_p_temp[1]*var_p_temp[4] - 0.5f*var_p_temp[2]*var_p_temp[5] - 0.5f*var_p_temp[3]*var_p_temp[6])*integration_step_size_device;
-            // /* e1p */ var_p_save[i+1][1]  = var_p_temp[1] + ( 0.5f*var_p_temp[0]*var_p_temp[4] + 0.5f*var_p_temp[2]*var_p_temp[6] - 0.5f*var_p_temp[3]*var_p_temp[5])*integration_step_size_device;
-            // /* e2p */ var_p_save[i+1][2]  = var_p_temp[2] + ( 0.5f*var_p_temp[0]*var_p_temp[5] + 0.5f*var_p_temp[3]*var_p_temp[4] - 0.5f*var_p_temp[1]*var_p_temp[6])*integration_step_size_device;
-            // /* e3p */ var_p_save[i+1][3]  = var_p_temp[3] + ( 0.5f*var_p_temp[0]*var_p_temp[6] + 0.5f*var_p_temp[1]*var_p_temp[5] - 0.5f*var_p_temp[2]*var_p_temp[4])*integration_step_size_device;
-            //         // normalize quaternion
-            //         float q_norm_inv = rsqrtf(var_p_save[i+1][0]*var_p_save[i+1][0] +var_p_save[i+1][1]*var_p_save[i+1][1] +var_p_save[i+1][2]*var_p_save[i+1][2] +var_p_save[i+1][3]*var_p_save[i+1][3]);
-            //         var_p_save[i+1][0] *= q_norm_inv;
-            //         var_p_save[i+1][1] *= q_norm_inv;
-            //         var_p_save[i+1][2] *= q_norm_inv;
-            //         var_p_save[i+1][3] *= q_norm_inv;
-            // /* wxp */ var_p_save[i][4]  = omega_setpoint[0];
-            // /* wyp */ var_p_save[i][5]  = omega_setpoint[1];
-            // /* wzp */ var_p_save[i][6]  = omega_setpoint[2];
-            //  /* xp  */ var_p_save[i+1][7]  = var_p_temp[7] + var_p_temp[10] * integration_step_size_device;
-            // /* yp  */ var_p_save[i+1][8]  = var_p_temp[8] + var_p_temp[11] * integration_step_size_device;
-            // /* zp  */ var_p_save[i+1][9]  = var_p_temp[9] + var_p_temp[12] * integration_step_size_device;
-
-            // /* xpp */ var_p_save[i+1][10] = var_p_temp[10] + acc_setpoint[0] * integration_step_size_device;
-            // /* ypp */ var_p_save[i+1][11] = var_p_temp[11] + acc_setpoint[1] * integration_step_size_device;
-            // /* zpp */ var_p_save[i+1][12] = var_p_temp[12] + acc_setpoint[2] * integration_step_size_device;
-
-        }
-        prev_acc[0] = acc_setpoint[0];
-        prev_acc[1] = acc_setpoint[1];
-        prev_acc[2] = acc_setpoint[2];
-        vel_int[0] += (vel_setpoint[0]-var_p_save[i][10] - CONST_PARAM_FLOAT::ARW_GAIN*(acc_setpoint[0]-acc_produced[0]))*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
-        vel_int[1] += (vel_setpoint[1]-var_p_save[i][11] - CONST_PARAM_FLOAT::ARW_GAIN*(acc_setpoint[1]-acc_produced[1]))*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
-        vel_int[2] += (vel_setpoint[2]-var_p_save[i][12])*CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE;
-        vel_int[2] = fminf(fmaxf(vel_int[2], -CONST_PARAM_FLOAT::A_OF_GRAVITY), CONST_PARAM_FLOAT::A_OF_GRAVITY);
-        // コストの計算
-        cost += (_COST_Q_X*(var_p_save[i][7] -target_host.x )*(var_p_save[i][7] -target_host.x) + _COST_Q_Y *(var_p_save[i][8] -target_host.y) *(var_p_save[i][8] -target_host.y) + _COST_Q_Z *(var_p_save[i][9] -target_host.z) *(var_p_save[i][9] -target_host.z)     // x, y, z
-                +  _COST_Q_XP*(var_p_save[i][10]-target_host.xp)*(var_p_save[i][10]-target_host.xp)+ _COST_Q_YP*(var_p_save[i][11]-target_host.yp)*(var_p_save[i][11]-target_host.yp)+ _COST_Q_ZP*(var_p_save[i][12]-target_host.zp)*(var_p_save[i][12]-target_host.zp)    // xp, yp, zp
-                +  _COST_Q_E1*(var_p_save[i][1] -target_host.e1)*(var_p_save[i][1] -target_host.e1)+ _COST_Q_E2*(var_p_save[i][2] -target_host.e2)*(var_p_save[i][2] -target_host.e2)+ _COST_Q_E3*(var_p_save[i][3] -target_host.e3)*(var_p_save[i][3] -target_host.e3)         // e1, e2, e3
-                +  _COST_Q_WX*(var_p_save[i][4] -target_host.wx)*(var_p_save[i][4] -target_host.wx)+ _COST_Q_WY*(var_p_save[i][5] -target_host.wy)*(var_p_save[i][5] -target_host.wy)+ _COST_Q_WZ*(var_p_save[i][6] -target_host.wz)*(var_p_save[i][6] -target_host.wz)          // wx, wy, wz                                                                                            // z_i
-                +  _COST_R_X*(best_input.decoupled_position[i][x]-qc_mcmpc::target_host.x)*(best_input.decoupled_position[i][x]-qc_mcmpc::target_host.x)
-                +  _COST_R_Y*(best_input.decoupled_position[i][y]-qc_mcmpc::target_host.y)*(best_input.decoupled_position[i][y]-qc_mcmpc::target_host.y)
-                +  _COST_R_Z*(best_input.decoupled_position[i][z]-qc_mcmpc::target_host.z)*(best_input.decoupled_position[i][z]-qc_mcmpc::target_host.z)
-                +  _COST_R_YAW*best_input.decoupled_position[i][yaw]*best_input.decoupled_position[i][yaw]
-        );
-    }
-    sum_cost += cost;
-}
-

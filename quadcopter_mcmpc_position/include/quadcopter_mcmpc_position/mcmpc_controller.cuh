@@ -55,5 +55,7 @@ namespace qc_mcmpc
         
         // グラフ出力ように, 計算済み順最適入力をコピー
         void copy_best_input_array(input_array &dst);
+
+        void reset_input_to_target(float tx, float ty, float tz, float tyaw);
     };
 }

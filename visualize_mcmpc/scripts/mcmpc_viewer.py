@@ -1,400 +1,263 @@
 import sys
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.widgets import Slider
 from matplotlib.collections import LineCollection
 
-# default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260508_064854.csv"
-default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_20260513_074656.csv"
-
-valid_states = [
-    "e0","e1","e2","e3",
-    "wx","wy","wz",
-    "x","y","z","yaw",
-    "vx","vy","vz",
-    "input1","input2","input3","input4",
-    "target_x","target_y","target_z",
-    "cost",
-
-    "pos_sp_x","pos_sp_y","pos_sp_z",
-    "vel_sp_x","vel_sp_y","vel_sp_z",
-    "acc_sp_x","acc_sp_y","acc_sp_z",
-    "yaw_sp","yawspeed_sp",
-
-    "thrust_sp_x","thrust_sp_y","thrust_sp_z",
-
-    "att_sp_w","att_sp_x","att_sp_y","att_sp_z",
-    "rate_sp_x","rate_sp_y","rate_sp_z",
-]
+default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260528_023838.csv"
 
 state = sys.argv[1] if len(sys.argv) > 1 else "x"
-csv_path = default_csv
-mode = "all"
+csv_path = sys.argv[2] if len(sys.argv) > 2 else default_csv
 
-if len(sys.argv) > 2:
-    if sys.argv[2] in ["all", "1step"]:
-        mode = sys.argv[2]
-    else:
-        csv_path = sys.argv[2]
+simulation = True
 
-if len(sys.argv) > 3:
-    if sys.argv[3] in ["all", "1step"]:
-        mode = sys.argv[3]
+dt = 0.02
+horizon = 50
+
+# 予測線を描き始める時刻 [s]
+prediction_start_time = 0.5
+
+# 予測線を描く間隔 [s]
+prediction_interval = 1.0
+
+A_OF_GRAVITY = 9.80665
+MAX_THRUST = 38.42
+
+if simulation:
+    MPC_XY_P = 0.30
+    MPC_Z_P = 1.00
+    MPC_XY_VEL_P_ACC = 1.80
+    MPC_XY_VEL_I_ACC = 0.40
+    MPC_XY_VEL_D_ACC = 0.20
+    MPC_Z_VEL_P_ACC = 4.00
+    MPC_VELD_LP = 5.0
+else:
+    MPC_XY_P = 0.95
+    MPC_Z_P = 1.00
+    MPC_XY_VEL_P_ACC = 1.80
+    MPC_XY_VEL_I_ACC = 0.40
+    MPC_XY_VEL_D_ACC = 0.20
+    MPC_Z_VEL_P_ACC = 4.00
+    MPC_VELD_LP = 5.0
+
+LPF = (2.0 * np.pi * MPC_VELD_LP) / (1.0 + 2.0 * np.pi * MPC_VELD_LP)
+
+state_names = [
+    "e0", "e1", "e2", "e3",
+    "wx", "wy", "wz",
+    "x", "y", "z",
+    "vx", "vy", "vz",
+]
+
+state_index = {name: i for i, name in enumerate(state_names)}
 
 df = pd.read_csv(csv_path)
 df.columns = df.columns.str.strip()
+df = df.reset_index(drop=True)
 
-t_cur = df["t"].values
+df["t"] = np.arange(len(df)) * dt
+
+cur_col = f"cur_{state}"
+target_col = f"target_{state}"
+u0_col = f"u0_{state}"
+
+if cur_col not in df.columns:
+    print(f"[ERROR] missing column: {cur_col}")
+    sys.exit(1)
+
+
+def calc_prediction_one_row(row_idx):
+    row = df.iloc[row_idx]
+
+    s = np.zeros(len(state_names))
+
+    # 予測の初期状態は必ず現在状態 cur_* から開始
+    for name in state_names:
+        s[state_index[name]] = row[f"cur_{name}"]
+
+    if row_idx == 0:
+        prev_vel = np.array([
+            row["cur_vx"],
+            row["cur_vy"],
+            row["cur_vz"],
+        ])
+        prev_acc = np.zeros(3)
+    else:
+        prev_row = df.iloc[row_idx - 1]
+
+        prev_vel = np.array([
+            prev_row["cur_vx"],
+            prev_row["cur_vy"],
+            prev_row["cur_vz"],
+        ])
+
+        cur_vel = np.array([
+            row["cur_vx"],
+            row["cur_vy"],
+            row["cur_vz"],
+        ])
+
+        prev_acc = LPF * ((cur_vel - prev_vel) / dt)
+
+    vel_int = np.zeros(3)
+
+    pred = np.zeros((horizon + 1, len(state_names)))
+    pred[0] = s.copy()
+
+    for h in range(horizon):
+        x_ref = row[f"u{h}_x"]
+        y_ref = row[f"u{h}_y"]
+        z_ref = row[f"u{h}_z"]
+
+        x_now = s[state_index["x"]]
+        y_now = s[state_index["y"]]
+        z_now = s[state_index["z"]]
+
+        vx = s[state_index["vx"]]
+        vy = s[state_index["vy"]]
+        vz = s[state_index["vz"]]
+
+        vel_sp = np.zeros(3)
+        vel_sp[0] = MPC_XY_P * (x_ref - x_now)
+        vel_sp[1] = MPC_XY_P * (y_ref - y_now)
+        vel_sp[2] = MPC_Z_P * (z_ref - z_now)
+
+        vel_dot_y = (vy - prev_vel[1]) / dt
+
+        acc_sp = np.zeros(3)
+        acc_sp[0] = MPC_XY_VEL_P_ACC * (vel_sp[0] - vx)
+        acc_sp[1] = (
+            MPC_XY_VEL_P_ACC * (vel_sp[1] - vy)
+            + MPC_XY_VEL_I_ACC * vel_int[1]
+            - MPC_XY_VEL_D_ACC * (
+                prev_acc[1] + LPF * (vel_dot_y - prev_acc[1])
+            )
+        )
+        acc_sp[2] = MPC_Z_VEL_P_ACC * (vel_sp[2] - vz)
+
+        step = dt / 2.0
+
+        for _ in range(2):
+            s_old = s.copy()
+
+            s[state_index["x"]] += s_old[state_index["vx"]] * step
+            s[state_index["y"]] += s_old[state_index["vy"]] * step
+            s[state_index["z"]] += s_old[state_index["vz"]] * step
+
+            s[state_index["vx"]] += acc_sp[0] * step
+            s[state_index["vy"]] += acc_sp[1] * step
+            s[state_index["vz"]] += acc_sp[2] * step
+
+        pred[h + 1] = s.copy()
+
+        prev_acc = acc_sp.copy()
+
+        vel_int[0] += (vel_sp[0] - s[state_index["vx"]]) * dt
+        vel_int[1] += (vel_sp[1] - s[state_index["vy"]]) * dt
+        vel_int[2] += (vel_sp[2] - s[state_index["vz"]]) * dt
+        vel_int[2] = np.clip(vel_int[2], -A_OF_GRAVITY, A_OF_GRAVITY)
+
+        prev_vel = np.array([
+            s[state_index["vx"]],
+            s[state_index["vy"]],
+            s[state_index["vz"]],
+        ])
+
+    return pred
+
+
+segments = []
+
+if state in state_index:
+    t_array = df["t"].to_numpy()
+
+    start_idx = int(np.searchsorted(t_array, prediction_start_time))
+    plot_every = max(1, int(round(prediction_interval / dt)))
+
+    for i in range(start_idx, len(df), plot_every):
+        row = df.iloc[i]
+        pred = calc_prediction_one_row(i)
+
+        # 予測線はその時刻 row["t"] から開始
+        xs = row["t"] + np.arange(horizon + 1) * dt
+        ys = pred[:, state_index[state]].copy()
+
+        segments.append(np.column_stack([xs, ys]))
+
 
 fig, ax = plt.subplots(figsize=(12, 5))
 plt.subplots_adjust(bottom=0.25, right=0.88)
 
-def has_col(col):
-    return col in df.columns
+ax.plot(
+    df["t"],
+    df[cur_col],
+    color="blue",
+    linewidth=3,
+    label=cur_col,
+)
 
-def plot_col(col, color=None, linewidth=2, label=None, linestyle="-"):
-    if has_col(col):
-        ax.plot(
-            t_cur,
-            df[col],
-            color=color,
-            linewidth=linewidth,
-            label=label or col,
-            linestyle=linestyle,
-        )
-        return True
+if u0_col in df.columns:
+    ax.plot(
+        df["t"],
+        df[u0_col],
+        color="gold",
+        linewidth=2,
+        label=u0_col,
+    )
 
-    print(f"[WARN] column not found: {col}")
-    return False
+if len(segments) > 0:
+    lc = LineCollection(
+        segments,
+        colors=[(1.0, 0.0, 0.0, 0.35)],
+        linewidths=1.5,
+    )
+    ax.add_collection(lc)
 
-# =========================
-# calc vs topic
-# topic を1サンプル前倒し
-# =========================
-def plot_calc_topic_pair(calc_col, topic_col):
-    ok1 = False
-    ok2 = False
+    ax.plot(
+        [],
+        [],
+        color="red",
+        linewidth=2,
+        label=f"predicted_{state}",
+    )
 
-    # calc
-    if has_col(calc_col):
-        ax.plot(
-            t_cur,
-            df[calc_col],
-            color="blue",
-            linewidth=2.0,
-            label=calc_col,
-        )
-        ok1 = True
-
-    # topic shifted
-    if has_col(topic_col):
-        shifted = df[topic_col].shift(-2)
-
-        ax.plot(
-            t_cur,
-            shifted,
-            color="green",
-            linewidth=1.8,
-            linestyle="--",
-            label=topic_col + "_shift",
-        )
-        ok2 = True
-
-    return ok1 or ok2
-
-# =========================
-# input
-# =========================
-if state.startswith("input"):
-    col = "input_" + state[-1]
-    plot_col(col, color="green", label=col)
-
-# =========================
-# target
-# =========================
-elif state.startswith("target"):
-    plot_col(state, color="green", linewidth=2, label=state)
-
-# =========================
-# cost
-# =========================
-elif state == "cost":
-    plot_col("cost", color="purple", linewidth=2, label="cost")
-
-# =========================
-# position setpoint
-# =========================
-elif state.startswith("pos_sp_"):
-    axis = state[-1]
-
-    plot_col(
-        f"topic_pos_sp_{axis}",
+if target_col in df.columns:
+    ax.plot(
+        df["t"],
+        df[target_col],
         color="green",
-        linewidth=2.0,
-        label=f"topic_pos_sp_{axis}",
+        linewidth=2,
+        label=target_col,
     )
-
-# =========================
-# velocity setpoint
-# =========================
-elif state.startswith("vel_sp_"):
-    axis = state[-1]
-
-    plot_calc_topic_pair(
-        f"calc_vel_sp_{axis}",
-        f"topic_vel_sp_{axis}",
-    )
-
-# =========================
-# acceleration setpoint
-# =========================
-elif state.startswith("acc_sp_"):
-    axis = state[-1]
-
-    plot_calc_topic_pair(
-        f"calc_acc_sp_{axis}",
-        f"topic_acc_sp_{axis}",
-    )
-
-# =========================
-# thrust setpoint
-# =========================
-elif state.startswith("thrust_sp_"):
-    axis = state[-1]
-
-    plot_calc_topic_pair(
-        f"calc_thrust_sp_{axis}",
-        f"topic_thrust_sp_{axis}",
-    )
-
-# =========================
-# attitude setpoint
-# =========================
-elif state.startswith("att_sp_"):
-    axis = state.split("_")[-1]   # w/x/y/z
-    plot_calc_topic_pair(
-        f"calc_att_sp_{axis}",
-        f"topic_att_sp_{axis}",
-    )
-
-# =========================
-# rate setpoint
-# =========================
-elif state.startswith("rate_sp_"):
-    axis = state[-1]
-
-    plot_calc_topic_pair(
-        f"calc_rate_sp_{axis}",
-        f"topic_rate_sp_{axis}",
-    )
-
-# =========================
-# yaw setpoint
-# =========================
-elif state == "yaw_sp":
-
-    plot_col(
-        "topic_yaw_sp",
-        color="green",
-        linewidth=2.0,
-        label="topic_yaw_sp",
-    )
-
-elif state == "yawspeed_sp":
-
-    plot_col(
-        "topic_yawspeed_sp",
-        color="green",
-        linewidth=2.0,
-        label="topic_yawspeed_sp",
-    )
-
-# =========================
-# yaw state
-# =========================
-elif state == "yaw":
-
-    if all(has_col(c) for c in ["cur_e0", "cur_e1", "cur_e2", "cur_e3"]):
-
-        q0 = df["cur_e0"]
-        q1 = df["cur_e1"]
-        q2 = df["cur_e2"]
-        q3 = df["cur_e3"]
-
-        yaw_cur = np.arctan2(
-            2.0 * (q0*q3 + q1*q2),
-            q0*q0 + q1*q1 - q2*q2 - q3*q3
-        )
-
-        ax.plot(
-            t_cur,
-            yaw_cur,
-            color="blue",
-            linewidth=3,
-            label="cur_yaw",
-        )
-
-    plot_col(
-        "topic_yaw_sp",
-        color="green",
-        linewidth=2.0,
-        label="topic_yaw_sp",
-        linestyle="--",
-    )
-
-    plot_col(
-        "topic_att_sp_yaw",
-        color="orange",
-        linewidth=1.5,
-        label="topic_att_sp_yaw",
-        linestyle=":",
-    )
-
-# =========================
-# normal state
-# =========================
-else:
-
-    cur_col = f"cur_{state}"
-
-    plot_col(
-        cur_col,
-        color="blue",
-        linewidth=3,
-        label=cur_col,
-    )
-
-    if state in ["x", "y", "z"]:
-
-        plot_col(
-            f"target_{state}",
-            color="green",
-            linewidth=2,
-            label=f"target_{state}",
-        )
-
-        plot_col(
-            f"topic_pos_sp_{state}",
-            color="orange",
-            linewidth=1.5,
-            label=f"topic_pos_sp_{state}",
-            linestyle="--",
-        )
-
-    pred_times_cols = []
-    pred_state_cols = []
-
-    h = 1
-
-    while True:
-
-        t_col = f"t_pred_{h}"
-        s_col = f"{h}{state}"
-
-        if t_col not in df.columns or s_col not in df.columns:
-            break
-
-        pred_times_cols.append(t_col)
-        pred_state_cols.append(s_col)
-
-        h += 1
-
-    if len(pred_times_cols) > 0:
-
-        if mode == "1step":
-
-            ax.plot(
-                df["t_pred_1"],
-                df[f"1{state}"],
-                color="red",
-                linewidth=1.0,
-                alpha=0.25,
-                label="1step",
-            )
-
-        else:
-
-            segments = []
-            colors = []
-
-            display_interval = 1.0
-            last_display_time = -0.5
-
-            for i in range(len(df)):
-
-                current_time = df.loc[i, "t"]
-
-                if current_time - last_display_time < display_interval:
-                    continue
-
-                last_display_time = current_time
-
-                xs = np.concatenate((
-                    [df.loc[i, "t"]],
-                    df.loc[i, pred_times_cols].values
-                ))
-
-                ys = np.concatenate((
-                    [df.loc[i, cur_col]],
-                    df.loc[i, pred_state_cols].values
-                ))
-
-                segments.append(np.column_stack([xs, ys]))
-
-                colors.append((1, 0, 0, 1.0))
-
-            lc = LineCollection(
-                segments,
-                colors=colors,
-                linewidths=2.5,
-            )
-
-            ax.add_collection(lc)
-
-            ax.plot([], [], color="red", alpha=1.0, linewidth=2.5, label="pred")
-
-# =========================
-# axes
-# =========================
-t_min = t_cur.min()
-t_max = t_cur.max()
 
 ax.set_title(state)
-ax.set_xlabel("time")
-
+ax.set_xlabel("time [s]")
 ax.grid()
-ax.legend(fontsize=16)
+ax.legend(fontsize=14)
 
 ax.relim()
 ax.autoscale_view()
 
-# =========================
-# horizontal slider
-# =========================
-init_width = min(2.0, t_max - t_min)
+t_min = 0.0
+t_max = float(df["t"].max())
 
+init_width = min(2.0, t_max - t_min)
 window_width = [init_width]
 
 slider_ax = plt.axes([0.15, 0.1, 0.7, 0.03])
-
 time_slider = Slider(
     slider_ax,
     "time",
     t_min,
     t_max,
-    valinit=t_min + init_width / 2,
+    valinit=init_width / 2.0,
 )
 
-# =========================
-# vertical slider
-# =========================
 ymin, ymax = ax.get_ylim()
-
 y_height = [ymax - ymin]
 
 y_slider_ax = plt.axes([0.91, 0.2, 0.02, 0.65])
-
 y_slider = Slider(
     y_slider_ax,
     "y",
@@ -404,136 +267,72 @@ y_slider = Slider(
     orientation="vertical",
 )
 
+
 def set_xlim(center):
-
-    half = window_width[0] / 2
-
+    half = window_width[0] / 2.0
     ax.set_xlim(center - half, center + half)
-
     fig.canvas.draw_idle()
+
 
 def set_ylim(center):
-
-    half = y_height[0] / 2
-
+    half = y_height[0] / 2.0
     ax.set_ylim(center - half, center + half)
-
     fig.canvas.draw_idle()
 
-def on_scroll(event):
 
+def on_scroll(event):
     if event.inaxes != ax:
         return
 
-    # y zoom
     if event.key == "shift":
-
         scale = 0.8 if event.button == "up" else 1.25
-
         y_height[0] *= scale
-
         set_ylim(y_slider.val)
+    else:
+        scale = 0.8 if event.button == "up" else 1.25
+        window_width[0] *= scale
+        set_xlim(time_slider.val)
 
-        return
 
-    # x zoom
-    scale = 0.8 if event.button == "up" else 1.25
-
-    window_width[0] *= scale
-
-    set_xlim(time_slider.val)
-
-# =========================
-# keyboard control
-# =========================
 def on_key(event):
-
-    # =====================
-    # x move
-    # =====================
     if event.key == "a":
-
-        new_center = time_slider.val - window_width[0] * 0.1
-
-        time_slider.set_val(new_center)
-
+        time_slider.set_val(time_slider.val - window_width[0] * 0.1)
     elif event.key == "d":
-
-        new_center = time_slider.val + window_width[0] * 0.1
-
-        time_slider.set_val(new_center)
-
-    # =====================
-    # x zoom
-    # =====================
+        time_slider.set_val(time_slider.val + window_width[0] * 0.1)
     elif event.key == "w":
-
         window_width[0] *= 0.8
-
         set_xlim(time_slider.val)
-
     elif event.key == "p":
-
         window_width[0] *= 1.25
-
         set_xlim(time_slider.val)
-
-    # =====================
-    # y move
-    # =====================
     elif event.key == "j":
-
-        new_center = y_slider.val - y_height[0] * 0.1
-
-        y_slider.set_val(new_center)
-
+        y_slider.set_val(y_slider.val - y_height[0] * 0.1)
     elif event.key == "l":
-
-        new_center = y_slider.val + y_height[0] * 0.1
-
-        y_slider.set_val(new_center)
-
-    # =====================
-    # y zoom
-    # =====================
+        y_slider.set_val(y_slider.val + y_height[0] * 0.1)
     elif event.key == "i":
-
         y_height[0] *= 0.8
-
         set_ylim(y_slider.val)
-
     elif event.key == "k":
-
         y_height[0] *= 1.25
-
         set_ylim(y_slider.val)
-
-    # =====================
-    # reset
-    # =====================
     elif event.key == "r":
-
         window_width[0] = init_width
-
         y_height[0] = ymax - ymin
 
-        time_slider.set_val(t_min + init_width / 2)
-
+        time_slider.set_val(init_width / 2.0)
         y_slider.set_val(0.5 * (ymin + ymax))
 
         set_xlim(time_slider.val)
-
         set_ylim(y_slider.val)
 
-# connect
+
+fig.canvas.mpl_connect("scroll_event", on_scroll)
 fig.canvas.mpl_connect("key_press_event", on_key)
 
 time_slider.on_changed(lambda v: set_xlim(v))
 y_slider.on_changed(lambda v: set_ylim(v))
 
-fig.canvas.mpl_connect("scroll_event", on_scroll)
-
-set_xlim(time_slider.val)
+set_xlim(init_width / 2.0)
 set_ylim(y_slider.val)
 
 plt.show()

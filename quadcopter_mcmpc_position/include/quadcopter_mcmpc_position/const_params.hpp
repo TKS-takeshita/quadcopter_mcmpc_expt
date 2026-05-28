@@ -24,9 +24,9 @@
 #define _DEVICE_CONST_N_OF_BLOCK 		64
 
 // cost for MPC
-#define _COST_Q_X 		5.0f
-#define _COST_Q_Y 		5.0f
-#define _COST_Q_Z 		5.0f
+#define _COST_Q_X 		10.0f
+#define _COST_Q_Y 		10.0f
+#define _COST_Q_Z 		10.0f
 #define _COST_Q_XP 		1.0f
 #define _COST_Q_YP 		1.0f
 #define _COST_Q_ZP 		1.0f
@@ -37,10 +37,10 @@
 #define _COST_Q_WY 		0.0f
 #define _COST_Q_WZ 		0.0f
 #define _COST_Q_ZI 		0.0f
-#define _COST_R_X 		0.00f
-#define _COST_R_Y 	    0.00f
-#define _COST_R_Z 	    0.00f
-#define _COST_R_YAW 	0.00f
+#define _COST_R_X 		0.01f
+#define _COST_R_Y 	    0.01f
+#define _COST_R_Z 	    0.01f
+#define _COST_R_YAW 	0.01f
 #ifdef MCMPC_WITH_FORCE_STATE
     #define _COST_Q_FX  1.0f
     #define _COST_Q_FY  1.0f
