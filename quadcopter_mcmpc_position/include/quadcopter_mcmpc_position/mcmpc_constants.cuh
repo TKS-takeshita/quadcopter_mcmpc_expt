@@ -107,6 +107,10 @@ namespace qc_mcmpc{
     extern __constant__ float var_and_z_i_device[_N_OF_ODES + 1];
     extern __constant__ input_array average_input_device;
     extern __constant__ float sigma_k_device[4];
+    extern __constant__ int square_waypoint_index_device;
+    extern __constant__ float square_waypoint_change_time_device;
+    extern __constant__ float mcmpc_log_device;
+    extern __constant__ float square_waypoints_device[_SQUARE_WAYPOINTS][3];
 
     extern void update_target_state_device();
 

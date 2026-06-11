@@ -14,9 +14,6 @@ enum decoupled_position
 
 namespace qc_mcmpc
 {
-    // 目標状態の更新用関数
-	void update_target_state_device(const target_state_t& target);
-
     // シングルトンとして実装
     class mcmpc_controller
     {

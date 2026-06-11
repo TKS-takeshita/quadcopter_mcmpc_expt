@@ -52,12 +52,19 @@ static bool offboard_enabled = false;
 static bool arm_request = false;
 static bool disarm_request = false;
 static bool kill_request = false;
+static bool takeoff_requested = false;
+static bool mcmpc_running = false;
 
 static float move_dist = 1.0f;
 static float rotate_angle = M_PI/4.0f;
+static constexpr float TAKEOFF_X = 0.0f;
+static constexpr float TAKEOFF_Y = 0.0f;
+static constexpr float TAKEOFF_Z = -1.0f;
+static constexpr float SQUARE_Z = -1.0f;
+static constexpr float SQUARE_WAYPOINT_THRESHOLD = 0.15f;
+static constexpr float SQUARE_WAYPOINT_HOLD_SEC = 1.0f;
 
 static uint64_t offboard_setpoint_counter = 0;
-float mcmpc_log = 0.0f;
 float cost = 0.0f;
 float sum_cost = 0.0f;
 
@@ -70,7 +77,6 @@ float omega_setpoint[3];
 // 現在状態
 static float current_x = 0.0f;
 static float current_y = 0.0f;
-// static float current_z = 0.0f;
 static float current_yaw = 0.0f;
 float target_yaw = 0.0f;
 
@@ -106,6 +112,59 @@ void sin_cosf(float x, float* s, float* c){
     *c = 1.0f - x2 / 2.0f + x2 * x2 / 24.0f;
 }
 
+void set_target_yaw(float yaw)
+{
+    target_yaw = wrap_pi(yaw);
+    float half_yaw = 0.5f * target_yaw;
+    target_host.e0 = std::cos(half_yaw);
+    target_host.e1 = 0.0f;
+    target_host.e2 = 0.0f;
+    target_host.e3 = std::sin(half_yaw);
+}
+
+void reset_integrator_state()
+{
+    vel_int_host[0] = 0.0f;
+    vel_int_host[1] = 0.0f;
+    vel_int_host[2] = 0.0f;
+    prev_velocity_host[0] = 0.0f;
+    prev_velocity_host[1] = 0.0f;
+    prev_velocity_host[2] = 0.0f;
+    prev_acceleration_host[0] = 0.0f;
+    prev_acceleration_host[1] = 0.0f;
+    prev_acceleration_host[2] = 0.0f;
+    cudaMemcpyToSymbol(qc_mcmpc::prev_velocity_device, prev_velocity_host, 3*sizeof(float));
+    cudaMemcpyToSymbol(qc_mcmpc::prev_acceleration_device, prev_acceleration_host, 3*sizeof(float));
+    cudaMemcpyToSymbol(qc_mcmpc::vel_int_device, vel_int_host, 3*sizeof(float));
+}
+
+void set_square_waypoint(int index)
+{
+    square_waypoint_index = index;
+    square_waypoint_change_time = mcmpc_log;
+    target_host.x = CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][0];
+    target_host.y = CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][1];
+    target_host.z = SQUARE_Z;
+    set_target_yaw(0.0f);
+    update_target_state_device();
+    RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
+        "square waypoint %d/%d: x=%f y=%f z=%f",
+        square_waypoint_index + 1,
+        _SQUARE_WAYPOINTS,
+        target_host.x,
+        target_host.y,
+        target_host.z);
+}
+
+void start_mcmpc_square()
+{
+    mcmpc_running = true;
+    control_mode = ControlMode::MCMPC_ATTITUDE;
+    reset_integrator_state();
+    set_square_waypoint(0);
+    RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "A -> MCMPC square start");
+}
+
 void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
 {
     int a_button            = msg->buttons.size() > 0   ? msg->buttons[0] : 0;
@@ -131,41 +190,46 @@ void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
     int stick_right_button 	= msg->buttons.size() > 10 	? msg->buttons[10]: 0;
     static int pre_stick_right = false;
 
-    if (a_button & !pre_a) {
-        arm_request = true;
-        control_mode = ControlMode::PX4_POSITION;
-        RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "request ARM +  OFFBOARD");
-        target_host.x = current_x;
-        target_host.y = current_y;
-        target_host.z = -0.8f;
-        target_yaw = current_yaw;
+    if (a_button && !pre_a) {
+        if (!takeoff_requested) {
+            arm_request = true;
+            takeoff_requested = true;
+            mcmpc_running = false;
+            control_mode = ControlMode::PX4_POSITION;
+            target_host.x = TAKEOFF_X;
+            target_host.y = TAKEOFF_Y;
+            target_host.z = TAKEOFF_Z;
+            set_target_yaw(current_yaw);
+            reset_integrator_state();
+            RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "A -> ARM/OFFBOARD + PX4 position takeoff to (0, 0, -1)");
+        } else if (!mcmpc_running) {
+            start_mcmpc_square();
+        } else {
+            RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "A ignored: MCMPC is already running");
+        }
         pre_a = true;
-        RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "A -> ARM + takeoff");
     }
     else if(!a_button)
         pre_a = false;
 
     if (x_button & !pre_x) {
-        control_mode = ControlMode::MCMPC_ATTITUDE;
-        vel_int_host[0] = 0.0f;
-        vel_int_host[1] = 0.0f;
-        vel_int_host[2] = 0.0f;
-        RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "%f", mcmpc_log);
         pre_x = true;
-        RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "X -> MCMPC mode");
+        RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "X unused: press A again to start MCMPC");
     }
     else if(!x_button)
         pre_x = false;
 
-    if (y_button & !pre_y) {
+    if (y_button && !pre_y) {
+        mcmpc_running = false;
         control_mode = ControlMode::PX4_POSITION;
         target_host.x = current_x;
         target_host.y = current_y;
         target_host.z = 0.0f;
-        target_yaw = current_yaw;
+        set_target_yaw(current_yaw);
+        reset_integrator_state();
         RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "%f", mcmpc_log);
         pre_y = true;
-        RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "Y -> LAND");
+        RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "Y -> MCMPC stop, PX4 position landing to z=0.0");
     }
     else if(!y_button){
         pre_y = false;
@@ -210,23 +274,13 @@ void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
     pre_start = start_button;
 
     if (stick_left_button && !pre_stick_left) {
-        target_yaw = wrap_pi(current_yaw + rotate_angle);
-        float half_yaw = 0.5f * target_yaw;
-        target_host.e0 = std::cos(half_yaw);
-        target_host.e1 = 0.0f;
-        target_host.e2 = 0.0f;
-        target_host.e3 = std::sin(half_yaw);
+        set_target_yaw(current_yaw + rotate_angle);
         target_changed = true;
     }
     pre_stick_left = stick_left_button;
 
     if (stick_right_button && !pre_stick_right) {
-        target_yaw = wrap_pi(current_yaw - rotate_angle);
-        float half_yaw = 0.5f * target_yaw;
-        target_host.e0 = std::cos(half_yaw);
-        target_host.e1 = 0.0f;
-        target_host.e2 = 0.0f;
-        target_host.e3 = std::sin(half_yaw);
+        set_target_yaw(current_yaw - rotate_angle);
         target_changed = true;
     }
     pre_stick_right = stick_right_button;
@@ -238,18 +292,9 @@ void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
     pre_power = power_button;
 
     if (target_changed) {
-        qc_mcmpc::update_target_state_device();
-
-        qc_mcmpc::mcmpc_controller::get_instance()
-            .reset_input_to_target(
-                target_host.x,
-                target_host.y,
-                target_host.z,
-                target_yaw
-            );
-
+        update_target_state_device();
         RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
-            "target copied and average input reset: x=%f y=%f z=%f yaw=%f",
+            "target copied: x=%f y=%f z=%f yaw=%f",
             target_host.x, target_host.y, target_host.z, target_yaw);
     }
 }
@@ -299,7 +344,6 @@ void rates_setpoint_callback(
 namespace quad_sim_base
 {
     void do_simulation(float var_array_to_integrate[]);
-    void output_screen(); //画面出力用関数
 
     // 最新のオドメトリデータ
     static px4_msgs::msg::VehicleOdometry::SharedPtr latest_odom;
@@ -337,21 +381,6 @@ namespace quad_sim_base
 
         process_time_buff.push_back(((long)(sec * 1e9)) + ns);
     }
-
-    void output_screen(){
-        static int cnt = 0;
-        float e0 = quad_sim_base::var_array_to_integrate[0]; // scalar (w)
-        float e1 = quad_sim_base::var_array_to_integrate[1]; // x
-        float e2 = quad_sim_base::var_array_to_integrate[2]; // y
-        float e3 = quad_sim_base::var_array_to_integrate[3]; // z
-        float roll  = atan2(2.0 * (e0 * e1 + e2 * e3), 1.0 - 2.0 * (e1 * e1 + e2 * e2));
-        float sin_pitch = 2.0 * (e0 * e2 - e3 * e1);
-        float pitch = asin(fmaxf(-1.0, fminf(1.0, sin_pitch))); // 範囲外エラー防止
-        float yaw   = atan2(2.0 * (e0 * e3 + e1 * e2), 1.0 - 2.0 * (e2 * e2 + e3 * e3));
-        float roll_deg  = roll  * (180.0 / M_PI);
-        float pitch_deg = pitch * (180.0 / M_PI);
-        float yaw_deg   = yaw   * (180.0 / M_PI);
-    }
 }
 
 void odometry_callback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg) {
@@ -361,8 +390,6 @@ void odometry_callback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg) {
 
     current_x = msg->position[0];
     current_y = msg->position[1];
-    // current_z = msg->position[2];
-
     double qw = msg->q[0];
     double qx = msg->q[1];
     double qy = msg->q[2];
@@ -460,12 +487,23 @@ int main(int argc, char *argv[])
             float vel_dot = (quad_sim_base::var_array_to_integrate[i+10] - prev_velocity_host[i]) / CONST_PARAM_FLOAT::CONTROL_PERIOD;
             acc_now[i] = prev_acceleration_host[i] + CONST_PARAM_FLOAT::LPF * (vel_dot - prev_acceleration_host[i]);
         }
-        float a_ref[3];
-        acc_setpoint[0]= mpc_xy_vel_p_acc*(vel_setpoint[0]-quad_sim_base::var_array_to_integrate[10]);
-        acc_setpoint[1]= mpc_xy_vel_p_acc*(vel_setpoint[1]-quad_sim_base::var_array_to_integrate[11]);
-        acc_setpoint[2]= mpc_z_vel_p_acc* (vel_setpoint[2]-quad_sim_base::var_array_to_integrate[12]);
-        // MPC計算
-        quad_sim_base::do_simulation(quad_sim_base::var_array_to_integrate);
+        acc_setpoint[0]= CONST_PARAM_FLOAT::MPC_XY_VEL_P_ACC*(vel_ref[0]-quad_sim_base::var_array_to_integrate[10]);
+        acc_setpoint[1]= CONST_PARAM_FLOAT::MPC_XY_VEL_P_ACC*(vel_ref[1]-quad_sim_base::var_array_to_integrate[11]);
+        acc_setpoint[2]= CONST_PARAM_FLOAT::MPC_Z_VEL_P_ACC* (vel_ref[2]-quad_sim_base::var_array_to_integrate[12]);
+
+        if (mcmpc_running) {
+            float dx = target_host.x - quad_sim_base::var_array_to_integrate[7];
+            float dy = target_host.y - quad_sim_base::var_array_to_integrate[8];
+            float waypoint_error = std::sqrt(dx * dx + dy * dy);
+            if ((mcmpc_log - square_waypoint_change_time) >= SQUARE_WAYPOINT_HOLD_SEC &&
+                waypoint_error < SQUARE_WAYPOINT_THRESHOLD &&
+                square_waypoint_index + 1 < _SQUARE_WAYPOINTS) {
+                set_square_waypoint(square_waypoint_index + 1);
+            }
+
+            // MPC計算はMCMPC中だけ実行する
+            quad_sim_base::do_simulation(quad_sim_base::var_array_to_integrate);
+        }
         
         px4_msgs::msg::OffboardControlMode ocm{};
         ocm.timestamp = node->get_clock()->now().nanoseconds() / 1000;
@@ -477,7 +515,6 @@ int main(int argc, char *argv[])
         if (control_mode == ControlMode::PX4_POSITION) {
             ocm.position = true;
         } else {
-            // ocm.body_rate = true;
             ocm.position = true;
         }
         offboard_ctrl_pub->publish(ocm);
@@ -520,16 +557,17 @@ int main(int argc, char *argv[])
         // ======================
         // MCMPC位置制御
         // ======================
-        if (control_mode == ControlMode::MCMPC_ATTITUDE) {
+        if (control_mode == ControlMode::MCMPC_ATTITUDE && mcmpc_running) {
             px4_msgs::msg::TrajectorySetpoint sp{};
             sp.timestamp = node->get_clock()->now().nanoseconds() / 1000;
             sp.position = {(float)quad_sim_base::input1, (float)quad_sim_base::input2, (float)quad_sim_base::input3};
             sp.yaw = (float)quad_sim_base::input4;
             traj_pub->publish(sp);
         }
-        // csv保存用1stepあとの状態をシミュレーション
         qc_mcmpc::input_array best_input;
-        qc_mcmpc::mcmpc_controller::get_instance().copy_best_input_array(best_input);
+        if (mcmpc_running) {
+            qc_mcmpc::mcmpc_controller::get_instance().copy_best_input_array(best_input);
+        }
         for(int i=0;i<3;i++){
             prev_velocity_host[i] = quad_sim_base::var_array_to_integrate[i+10];
             prev_acceleration_host[i] = acc_now[i];
@@ -541,58 +579,60 @@ int main(int argc, char *argv[])
         cudaMemcpyToSymbol(qc_mcmpc::prev_velocity_device, prev_velocity_host, 3*sizeof(float));
         cudaMemcpyToSymbol(qc_mcmpc::prev_acceleration_device, acc_now,3*sizeof(float));
         cudaMemcpyToSymbol(qc_mcmpc::vel_int_device, vel_int_host, 3*sizeof(float));
-        csv << mcmpc_log;
-        // 現在状態（左）
-        for(int i=0;i<_N_OF_ODES;i++){
-            csv << "," << quad_sim_base::var_array_to_integrate[i];
-        }
-
-        for (int h = 0; h < _DEVICE_CONST_HORIZON; h++) {
-            csv << "," << best_input.decoupled_position[h][x]
-                << "," << best_input.decoupled_position[h][y]
-                << "," << best_input.decoupled_position[h][z]
-                << "," << best_input.decoupled_position[h][yaw];
-        }
-
-        csv << "," << target_host.x << "," << target_host.y << "," << target_host.z;
-
-        {
-            std::lock_guard<std::mutex> sp_lock(sp_mutex);
-
-            if (has_traj_sp) {
-                csv << "," << latest_traj_sp.vx
-                    << "," << latest_traj_sp.vy
-                    << "," << latest_traj_sp.vz
-                    << "," << latest_traj_sp.acceleration[0]
-                    << "," << latest_traj_sp.acceleration[1]
-                    << "," << latest_traj_sp.acceleration[2];
-            } else {
-                csv << ",nan,nan,nan,nan,nan,nan";
+        if (mcmpc_running) {
+            csv << mcmpc_log;
+            // 現在状態（左）
+            for(int i=0;i<_N_OF_ODES;i++){
+                csv << "," << quad_sim_base::var_array_to_integrate[i];
             }
 
-            if (has_att_sp) {
-                csv << "," << latest_att_sp.q_d[0]
-                    << "," << latest_att_sp.q_d[1]
-                    << "," << latest_att_sp.q_d[2]
-                    << "," << latest_att_sp.q_d[3];
-            } else {
-                csv << ",nan,nan,nan,nan";
+            for (int h = 0; h < _DEVICE_CONST_HORIZON; h++) {
+                csv << "," << best_input.decoupled_position[h][x]
+                    << "," << best_input.decoupled_position[h][y]
+                    << "," << best_input.decoupled_position[h][z]
+                    << "," << best_input.decoupled_position[h][yaw];
             }
 
-            if (has_rate_sp) {
-                csv << "," << latest_rate_sp.roll
-                    << "," << latest_rate_sp.pitch
-                    << "," << latest_rate_sp.yaw
-                    << "," << latest_rate_sp.thrust_body[0]
-                    << "," << latest_rate_sp.thrust_body[1]
-                    << "," << latest_rate_sp.thrust_body[2];
-            } else {
-                csv << ",nan,nan,nan,nan,nan,nan";
+            csv << "," << target_host.x << "," << target_host.y << "," << target_host.z;
+
+            {
+                std::lock_guard<std::mutex> sp_lock(sp_mutex);
+
+                if (has_traj_sp) {
+                    csv << "," << latest_traj_sp.vx
+                        << "," << latest_traj_sp.vy
+                        << "," << latest_traj_sp.vz
+                        << "," << latest_traj_sp.acceleration[0]
+                        << "," << latest_traj_sp.acceleration[1]
+                        << "," << latest_traj_sp.acceleration[2];
+                } else {
+                    csv << ",nan,nan,nan,nan,nan,nan";
+                }
+
+                if (has_att_sp) {
+                    csv << "," << latest_att_sp.q_d[0]
+                        << "," << latest_att_sp.q_d[1]
+                        << "," << latest_att_sp.q_d[2]
+                        << "," << latest_att_sp.q_d[3];
+                } else {
+                    csv << ",nan,nan,nan,nan";
+                }
+
+                if (has_rate_sp) {
+                    csv << "," << latest_rate_sp.roll
+                        << "," << latest_rate_sp.pitch
+                        << "," << latest_rate_sp.yaw
+                        << "," << latest_rate_sp.thrust_body[0]
+                        << "," << latest_rate_sp.thrust_body[1]
+                        << "," << latest_rate_sp.thrust_body[2];
+                } else {
+                    csv << ",nan,nan,nan,nan,nan,nan";
+                }
             }
+
+            csv << "\n";
+            mcmpc_log +=0.02;
         }
-
-        csv << "\n";
-        mcmpc_log +=0.02;
         rate.sleep();
     }
 

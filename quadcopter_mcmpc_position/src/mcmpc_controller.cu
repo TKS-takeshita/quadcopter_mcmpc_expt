@@ -68,11 +68,15 @@ namespace qc_mcmpc
 	__constant__ float control_period_device;
 	__constant__ float integration_step_size_device;
 
-	__constant__ float var_and_z_i_device[_N_OF_ODES + 1];
-	__constant__ input_array average_input_device;
-	__constant__ float sigma_k_device[4];
+		__constant__ float var_and_z_i_device[_N_OF_ODES + 1];
+		__constant__ input_array average_input_device;
+		__constant__ float sigma_k_device[4];
+        __constant__ int square_waypoint_index_device;
+        __constant__ float square_waypoint_change_time_device;
+        __constant__ float mcmpc_log_device;
+        __constant__ float square_waypoints_device[_SQUARE_WAYPOINTS][3];
 
-	__global__ static void init_curand_seed(curandState *state_array, int seed);
+		__global__ static void init_curand_seed(curandState *state_array, int seed);
 	__global__ static void generate_input_samples_and_calc_costs(curandState *state, input_array* input_array_sample_device, float* cost_vec);
 	__global__ static void extract_elite_sample(input_array* src, input_array* dst, int* elite_indices);
 
@@ -314,7 +318,6 @@ namespace qc_mcmpc
 
 		//
         // 加重平均された入力列に対してコスト関数を再計算
-        //
         best_input_array.cost = 0.0f;
 		return best_input_array.cost;
 	}
@@ -338,9 +341,16 @@ namespace qc_mcmpc
             for ( int j = 0; j < 4; j++ )
                 best_input_array.decoupled_position[i][j] = best_input_array.decoupled_position[i + 1][j];
 
-		// 準最適制御入力の計算
+		// 準最適制御入力の計算 同一周期内反復
         for ( int k = 0; k < CONST_PARAM::ITERATION_TIMES; k++ )
         {
+            float sigma_k_iter[4];
+            float scale = powf(0.5f, k);
+            for (int j = 0; j < 4; j++) {
+                sigma_k_iter[j] = sigma_k[j] * scale;
+            }
+            cudaMemcpyToSymbol(sigma_k_device, sigma_k_iter, 4 * sizeof(float));
+            
             cudaMemcpyToSymbol( average_input_device, &best_input_array, sizeof( input_array ) );
             
             generate_input_samples_and_calc_costs<<< _DEVICE_CONST_N_OF_BLOCK, _DEVICE_CONST_THREAD_PER_BLOCK >>>( curand_state_array, thrust::raw_pointer_cast( input_array_device_vec.data() ), thrust::raw_pointer_cast( cost_device_vec_for_sorting.data() ) );
@@ -367,21 +377,4 @@ namespace qc_mcmpc
                 dst.decoupled_position[i][j] = best_input_array.decoupled_position[i][j];
 	}
 
-    void mcmpc_controller::reset_input_to_target(float tx, float ty, float tz, float tyaw)
-    {
-        for (int i = 0; i < _DEVICE_CONST_HORIZON; i++) {
-            best_input_array.decoupled_position[i][x]   = tx;
-            best_input_array.decoupled_position[i][y]   = ty;
-            best_input_array.decoupled_position[i][z]   = tz;
-            best_input_array.decoupled_position[i][yaw] = tyaw;
-        }
-
-        cudaMemcpyToSymbol(
-            average_input_device,
-            &best_input_array,
-            sizeof(input_array)
-        );
-    }
-
 }
-

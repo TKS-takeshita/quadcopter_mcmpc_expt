@@ -23,24 +23,28 @@
 #define _DEVICE_CONST_THREAD_PER_BLOCK 	128 //_DEVICE_CONST_THREAD_PER_BLOCK * N_OF_BLOCK = N_OF_SAMPLES
 #define _DEVICE_CONST_N_OF_BLOCK 		64
 
+#define _SQUARE_WAYPOINTS              7 // 7
+#define _SQUARE_WAYPOINT_THRESHOLD      0.15f
+#define _SQUARE_WAYPOINT_HOLD_SEC       1.0f
+
 // cost for MPC
-#define _COST_Q_X 		10.0f
-#define _COST_Q_Y 		10.0f
-#define _COST_Q_Z 		10.0f
-#define _COST_Q_XP 		1.0f
-#define _COST_Q_YP 		1.0f
-#define _COST_Q_ZP 		1.0f
-#define _COST_Q_E1 		0.0f
-#define _COST_Q_E2 		0.0f
-#define _COST_Q_E3 		0.0f
-#define _COST_Q_WX 		0.0f
-#define _COST_Q_WY 		0.0f
-#define _COST_Q_WZ 		0.0f
+#define _COST_Q_X 		1.0f
+#define _COST_Q_Y 		1.0f
+#define _COST_Q_Z 		1.0f
+#define _COST_Q_XP 		5.0f
+#define _COST_Q_YP 		5.0f
+#define _COST_Q_ZP 		5.0f
+#define _COST_Q_E1 		1.0f
+#define _COST_Q_E2 		1.0f
+#define _COST_Q_E3 		1.0f
+#define _COST_Q_WX 		5.0f
+#define _COST_Q_WY 		5.0f
+#define _COST_Q_WZ 		5.0f
 #define _COST_Q_ZI 		0.0f
-#define _COST_R_X 		0.01f
-#define _COST_R_Y 	    0.01f
-#define _COST_R_Z 	    0.01f
-#define _COST_R_YAW 	0.01f
+#define _COST_R_X 		0.1f
+#define _COST_R_Y 	    0.1f
+#define _COST_R_Z 	    0.1f
+#define _COST_R_YAW 	0.1f
 #ifdef MCMPC_WITH_FORCE_STATE
     #define _COST_Q_FX  1.0f
     #define _COST_Q_FY  1.0f
@@ -48,6 +52,10 @@
 #endif
 
 // const for host(CPU)
+
+extern int square_waypoint_index;
+extern float square_waypoint_change_time;
+extern float mcmpc_log;
 
 struct CONST_PARAM
 {
@@ -207,6 +215,8 @@ struct CONST_PARAM_FLOAT
     static const float MC_YAWRATE_I;
     static const float CA_ROTOR_KM[4];
     static const float CA_ROTOR_CT[4];
+
+    static const float square_waypoints[_SQUARE_WAYPOINTS][3];
 
     static const float ARW_GAIN;
     
