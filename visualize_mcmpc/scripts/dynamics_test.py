@@ -191,8 +191,9 @@ def cu_mpc_simulator_step(
     z_vel_max_up=MPC_Z_VEL_MAX_UP, thrust_min=MPC_THR_MIN, no_thrust=False,
     hover_thrust=MPC_THR_HOVER, tilt_limit=MPC_TILT_MAX,
 ):
+    # s:機体状態vec 
     var = np.asarray(s, dtype=float).copy()
-    q_prev = normalize(var[0:4])
+    q_prev = normalize(var[0:4])#現在姿勢
     if np.linalg.norm(q_prev) < 1.0e-8:
         q_prev = np.array([1.0, 0.0, 0.0, 0.0])
     var[0:4] = q_prev
@@ -200,14 +201,18 @@ def cu_mpc_simulator_step(
     x_ref, y_ref, z_ref = np.asarray(pos_sp, dtype=float)
     yaw_ref = float(yaw_sp)
 
+    # 現在速度
     vel_prev_state = var[[STATE_INDEX["vx"], STATE_INDEX["vy"], STATE_INDEX["vz"]]].copy()
+    # 現在速度の微分
     vel_dot = (vel_prev_state - prev_vel) / step_dt
+    # LPF用の係数を計算 MPC_VELD_LP:速度微分LPFカットオフ周波数
     if MPC_VELD_LP > 1.0e-6:
         vel_dot_alpha = step_dt / (step_dt + 1.0 / (2.0 * np.pi * MPC_VELD_LP))
     else:
         vel_dot_alpha = 1.0
+    # 速度微分にLPFを適用
     vel_dot_lpf = prev_acc + vel_dot_alpha * (vel_dot - prev_acc)
-
+    # スラストを出さない状態・目標位置が無効な状態では、加速度目標値をPX4側でスラスト無効・未着陸に近い状態を表すダミー値にする
     if no_thrust or not np.all(np.isfinite([x_ref, y_ref, z_ref])):
         acc_setpoint = np.array([0.0, 0.0, 100.0])
         thrust_setpoint = np.zeros(3)
@@ -218,13 +223,13 @@ def cu_mpc_simulator_step(
             "rate_sp": np.zeros(3),
             "thr_sp": thrust_setpoint,
         }
-
-    vel_setpoint_position = np.array([
+    # 位置制御のP制御で速度目標値を計算
+    vel_setpoint = np.array([
         MPC_XY_P * (x_ref - var[STATE_INDEX["x"]]),
         MPC_XY_P * (y_ref - var[STATE_INDEX["y"]]),
         MPC_Z_P * (z_ref - var[STATE_INDEX["z"]]),
     ])
-    vel_setpoint = vel_setpoint_position.copy()
+    # 水平速度の制限
     vel_xy_norm = np.sqrt(vel_setpoint[0] ** 2 + vel_setpoint[1] ** 2)
     if vel_xy_norm > MPC_XY_VEL_MAX and vel_xy_norm > 1.0e-8:
         vel_setpoint[:2] = vel_setpoint[:2] / vel_xy_norm * MPC_XY_VEL_MAX
@@ -233,21 +238,22 @@ def cu_mpc_simulator_step(
         vel_setpoint[2] = z_vel_min
     elif vel_setpoint[2] > MPC_Z_VEL_MAX_DOWN:
         vel_setpoint[2] = MPC_Z_VEL_MAX_DOWN
-
+    # 速度誤差を計算
     vel_error = vel_setpoint - vel_prev_state
-
+    # 加速度目標値を計算
     acc_setpoint = np.array([
         MPC_XY_VEL_P_ACC * vel_error[0] + vel_int[0] - MPC_XY_VEL_D_ACC * vel_dot_lpf[0],
         MPC_XY_VEL_P_ACC * vel_error[1] + vel_int[1] - MPC_XY_VEL_D_ACC * vel_dot_lpf[1],
         MPC_Z_VEL_P_ACC * vel_error[2] + vel_int[2] - MPC_Z_VEL_D_ACC * vel_dot_lpf[2],
     ])
-
+    # 加速度目標値から目標機体姿勢のz軸を計算
     body_z = np.array([-acc_setpoint[0], -acc_setpoint[1], A_OF_GRAVITY - acc_setpoint[2]])
     body_z = normalize(body_z)
     if np.linalg.norm(body_z) < 1.0e-8:
         body_z = np.array([0.0, 0.0, 1.0])
-
+    # 目標姿勢body_zが鉛直方向からどれだけ傾いているか
     tilt_angle = np.arccos(np.clip(body_z[2], -1.0, 1.0))
+    # 傾き方向を維持した状態で角度はtilt_limitに制限
     if tilt_angle > tilt_limit:
         rejection = np.array([body_z[0], body_z[1], 0.0])
         rejection_norm = np.linalg.norm(rejection)
@@ -262,11 +268,15 @@ def cu_mpc_simulator_step(
         ])
 
     thrust_ned_z = acc_setpoint[2] * (hover_thrust / A_OF_GRAVITY) - hover_thrust
+    # 目標z軸の鉛直軸に対するcos((0, 0, 1)との内積)
     cos_ned_body = body_z[2] if abs(body_z[2]) >= 1.0e-6 else 1.0e-6
+    # スラストを目標z軸方向に変換 thrust_ned_z = collective_thrust*cos_ned_body
     collective_thrust = min(thrust_ned_z / cos_ned_body, -thrust_min)
+    # z軸方向にcollective_thrustのスラスト目標値を生成
     thrust_setpoint = body_z * collective_thrust
 
     vel_error_for_int = vel_error.copy()
+
     if (thrust_setpoint[2] >= -thrust_min and vel_error_for_int[2] >= 0.0) or \
        (thrust_setpoint[2] <= -MPC_THR_MAX and vel_error_for_int[2] <= 0.0):
         vel_error_for_int[2] = 0.0
@@ -277,12 +287,15 @@ def cu_mpc_simulator_step(
     thrust_z_max_squared = thrust_max_squared - allocated_horizontal_thrust * allocated_horizontal_thrust
     thrust_setpoint[2] = max(thrust_setpoint[2], -np.sqrt(max(0.0, thrust_z_max_squared)))
 
+
     thrust_max_xy_squared = thrust_max_squared - thrust_setpoint[2] * thrust_setpoint[2]
     thrust_max_xy = np.sqrt(max(0.0, thrust_max_xy_squared))
     if thrust_sp_xy_norm > thrust_max_xy and thrust_sp_xy_norm > 1.0e-8:
         thrust_setpoint[:2] = thrust_setpoint[:2] / thrust_sp_xy_norm * thrust_max_xy
 
+    # 制限後のxyスラストから生成される加速度目標値を計算
     acc_sp_xy_produced = thrust_setpoint[:2] * (A_OF_GRAVITY / hover_thrust)
+    # xy方向アンチワインドアップ補正
     if np.dot(acc_setpoint[:2], acc_setpoint[:2]) > np.dot(acc_sp_xy_produced, acc_sp_xy_produced):
         arw_gain = 2.0 / MPC_XY_VEL_P_ACC
         vel_error_for_int[:2] -= arw_gain * (acc_setpoint[:2] - acc_sp_xy_produced)
@@ -292,7 +305,9 @@ def cu_mpc_simulator_step(
     if np.linalg.norm(att_body_z) < 1.0e-8:
         att_body_z = np.array([0.0, 0.0, 1.0])
     sy, cy = sin_cos_simulator(yaw_ref)
+    # yaw目標値のsin,cosから水平面内の基準y軸を作成
     y_c = np.array([-sy, cy, 0.0])
+    # y_cと目標z軸の外積から目標x軸を計算
     body_x = np.cross(y_c, att_body_z)
     if att_body_z[2] < 0.0:
         body_x = -body_x
@@ -316,8 +331,8 @@ def cu_mpc_simulator_step(
     next_var[STATE_INDEX["x"]] += v_prev[0] * step_dt
     next_var[STATE_INDEX["y"]] += v_prev[1] * step_dt
     next_var[STATE_INDEX["z"]] += v_prev[2] * step_dt
-    next_var[STATE_INDEX["vx"]] = v_prev[0] + acc_setpoint[0] * step_dt
-    next_var[STATE_INDEX["vy"]] = v_prev[1] + acc_setpoint[1] * step_dt
+    next_var[STATE_INDEX["vx"]] = v_prev[0] + acc_sp_xy_produced[0] * step_dt
+    next_var[STATE_INDEX["vy"]] = v_prev[1] + acc_sp_xy_produced[1] * step_dt
     next_var[STATE_INDEX["vz"]] = v_prev[2] + acc_setpoint[2] * step_dt
 
     q_dot = np.array([
