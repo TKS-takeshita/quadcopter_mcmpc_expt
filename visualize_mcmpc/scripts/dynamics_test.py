@@ -9,7 +9,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_step4.csv"
+DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_step5.csv"
 
 DT = 0.02
 
@@ -35,9 +35,32 @@ MPC_TILT_MAX = 0.78539816339
 MC_ROLL_P = 4.00
 MC_PITCH_P = 4.00
 MC_YAW_P = 2.80
+MC_ROLLRATE_P = 1.0
+MC_PITCHRATE_P = 1.0
+MC_YAWRATE_P = 1.0
+MC_ROLLRATE_D = 0.0035
+MC_PITCHRATE_D = 0.0035
+MC_YAWRATE_D = 0.00
+MC_ROLLRATE_I = 0.2
+MC_PITCHRATE_I = 0.2
+MC_YAWRATE_I = 0.2
 MPC_VELD_LP = 5.0
 RATE_DELAY_STEPS = 3
 ACC_DELAY_STEPS = 3
+
+DRONE_MASS = 2.3
+DRONE_INERTIA = np.diag([0.0418, 0.04226, 0.05619])
+ROTOR_POSITIONS = np.array([
+    [0.180655, 0.180655, 0.0],   # rotor_1 front right, ccw
+    [-0.180655, -0.180655, 0.0], # rotor_2 back left, ccw
+    [0.180655, -0.180655, 0.0],  # rotor_3 front left, cw
+    [-0.180655, 0.180655, 0.0],  # rotor_4 back right, cw
+], dtype=float)
+ROTOR_YAW_SIGNS = np.array([1.0, 1.0, -1.0, -1.0], dtype=float)
+MOTOR_CONSTANT = 1.09e-5
+MOMENT_CONSTANT = 1.5e-7
+MOTOR_INPUT_SCALING = 1000.0
+MAX_ROT_VELOCITY = 1120.0
 
 TAKEOFF_STATE_DISARMED = 1
 TAKEOFF_STATE_SPOOLUP = 2
@@ -130,6 +153,51 @@ def quat_to_euler(q):
     return np.array([roll, pitch, yaw])
 
 
+def quat_to_rotmat(q):
+    q0, q1, q2, q3 = normalize(q)
+    return np.array([
+        [1.0 - 2.0 * (q2 * q2 + q3 * q3), 2.0 * (q1 * q2 - q0 * q3), 2.0 * (q1 * q3 + q0 * q2)],
+        [2.0 * (q1 * q2 + q0 * q3), 1.0 - 2.0 * (q1 * q1 + q3 * q3), 2.0 * (q2 * q3 - q0 * q1)],
+        [2.0 * (q1 * q3 - q0 * q2), 2.0 * (q2 * q3 + q0 * q1), 1.0 - 2.0 * (q1 * q1 + q2 * q2)],
+    ])
+
+
+def mix_px4_quad_x(thrust_sp, torque_sp):
+    collective = -float(thrust_sp[2])
+    roll, pitch, yaw = np.asarray(torque_sp, dtype=float)
+    return np.array([
+        collective - 0.70710678 * roll + 0.70710678 * pitch + yaw,
+        collective + 0.70710678 * roll - 0.70710678 * pitch + yaw,
+        collective + 0.70710678 * roll + 0.70710678 * pitch - yaw,
+        collective - 0.70710678 * roll - 0.70710678 * pitch - yaw,
+    ])
+
+
+def actuator_to_physical(actuator, q, omega_body):
+    actuator = np.clip(np.asarray(actuator, dtype=float)[:4], 0.0, 1.0)
+    motor_speed = np.clip(actuator * MOTOR_INPUT_SCALING, 0.0, MAX_ROT_VELOCITY)
+    rotor_forces = MOTOR_CONSTANT * motor_speed * motor_speed
+    force_body = np.array([0.0, 0.0, -np.sum(rotor_forces)])
+
+    torque_body = np.zeros(3)
+    for motor_idx, (pos, force, yaw_sign) in enumerate(zip(ROTOR_POSITIONS, rotor_forces, ROTOR_YAW_SIGNS)):
+        torque_body += np.cross(pos, np.array([0.0, 0.0, -force]))
+        torque_body[2] += yaw_sign * MOMENT_CONSTANT * motor_speed[motor_idx] ** 2
+
+    rot = quat_to_rotmat(q)
+    acc_ned = rot @ force_body / DRONE_MASS + np.array([0.0, 0.0, A_OF_GRAVITY])
+    inertia_omega = DRONE_INERTIA @ omega_body
+    omega_dot = np.linalg.solve(DRONE_INERTIA, torque_body - np.cross(omega_body, inertia_omega))
+    return {
+        "motor_speed": motor_speed,
+        "rotor_force": rotor_forces,
+        "force_body": force_body,
+        "torque_body": torque_body,
+        "acc_ned": acc_ned,
+        "omega_dot": omega_dot,
+    }
+
+
 def rotmat_to_quat(body_x, body_y, body_z):
     r00, r01, r02 = body_x[0], body_y[0], body_z[0]
     r10, r11, r12 = body_x[1], body_y[1], body_z[1]
@@ -190,6 +258,7 @@ def input_from_row(row):
 
 def cu_mpc_simulator_step(
     s, pos_sp, yaw_sp, prev_vel, prev_acc, vel_int, step_dt,
+    prev_omega=None, rate_int=None,
     z_vel_max_up=MPC_Z_VEL_MAX_UP, thrust_min=MPC_THR_MIN, no_thrust=False,
     hover_thrust=MPC_THR_HOVER, tilt_limit=MPC_TILT_MAX,
     rate_delay_buffer=None, rate_delay_steps=0,
@@ -220,6 +289,9 @@ def cu_mpc_simulator_step(
     if no_thrust or not np.all(np.isfinite([x_ref, y_ref, z_ref])):
         acc_setpoint = np.array([0.0, 0.0, 100.0])
         thrust_setpoint = np.zeros(3)
+        torque_setpoint = np.zeros(3)
+        motor_setpoint = np.zeros(4)
+        physical = actuator_to_physical(motor_setpoint, q_prev, np.zeros(3))
         return var.copy(), vel_dot_lpf, np.zeros(3), {
             "vel_sp": np.full(3, np.nan),
             "acc_sp": acc_setpoint,
@@ -228,6 +300,13 @@ def cu_mpc_simulator_step(
             "rate_sp_used": np.zeros(3),
             "acc_sp_used": np.zeros(3),
             "thr_sp": thrust_setpoint,
+            "torque_sp": torque_setpoint,
+            "motor_sp": motor_setpoint,
+            "motor_from_px4_torque": motor_setpoint,
+            "phys_acc": physical["acc_ned"],
+            "phys_wdot": physical["omega_dot"],
+            "phys_force": physical["force_body"],
+            "phys_torque": physical["torque_body"],
         }
     # 位置制御のP制御で速度目標値を計算
     vel_setpoint = np.array([
@@ -334,6 +413,19 @@ def cu_mpc_simulator_step(
 
     v_prev = vel_prev_state.copy()
     w_prev = var[[STATE_INDEX["wx"], STATE_INDEX["wy"], STATE_INDEX["wz"]]].copy()
+    if prev_omega is None:
+        prev_omega = w_prev.copy()
+    if rate_int is None:
+        rate_int = np.zeros(3)
+    omega_dot = (w_prev - prev_omega) / step_dt
+    rate_error = omega_setpoint - w_prev
+    torque_setpoint = np.array([
+        MC_ROLLRATE_P * rate_error[0] + rate_int[0] - MC_ROLLRATE_D * omega_dot[0],
+        MC_PITCHRATE_P * rate_error[1] + rate_int[1] - MC_PITCHRATE_D * omega_dot[1],
+        MC_YAWRATE_P * rate_error[2] + rate_int[2] - MC_YAWRATE_D * omega_dot[2],
+    ])
+    motor_setpoint = mix_px4_quad_x(thrust_setpoint, torque_setpoint)
+    physical = actuator_to_physical(motor_setpoint, q_prev, w_prev)
     acc_for_dynamics = np.array([
         acc_sp_xy_produced[0],
         acc_sp_xy_produced[1],
@@ -376,6 +468,10 @@ def cu_mpc_simulator_step(
     vel_int_next[1] += vel_error_for_int[1] * MPC_XY_VEL_I_ACC * step_dt
     vel_int_next[2] += vel_error_for_int[2] * MPC_Z_VEL_I_ACC * step_dt
     vel_int_next[2] = np.clip(vel_int_next[2], -A_OF_GRAVITY, A_OF_GRAVITY)
+    rate_int_next = rate_int.copy()
+    rate_int_next[0] += rate_error[0] * MC_ROLLRATE_I * step_dt
+    rate_int_next[1] += rate_error[1] * MC_PITCHRATE_I * step_dt
+    rate_int_next[2] += rate_error[2] * MC_YAWRATE_I * step_dt
 
     return next_var, vel_dot_lpf, vel_int_next, {
         "vel_sp": vel_setpoint,
@@ -385,6 +481,14 @@ def cu_mpc_simulator_step(
         "rate_sp_used": omega_for_dynamics,
         "acc_sp_used": acc_for_dynamics,
         "thr_sp": thrust_setpoint,
+        "torque_sp": torque_setpoint,
+        "motor_sp": motor_setpoint,
+        "motor_from_px4_torque": np.full(4, np.nan),
+        "phys_acc": physical["acc_ned"],
+        "phys_wdot": physical["omega_dot"],
+        "phys_force": physical["force_body"],
+        "phys_torque": physical["torque_body"],
+        "rate_int_next": rate_int_next,
     }
 
 
@@ -399,11 +503,20 @@ def build_history(df, step_dt, rate_delay_steps=RATE_DELAY_STEPS, acc_delay_step
         "att_sp": np.full((n, 4), np.nan),
         "rate_sp": np.full((n, 3), np.nan),
         "thr_sp": np.full((n, 3), np.nan),
+        "torque_sp": np.full((n, 3), np.nan),
+        "motor_sp": np.full((n, 4), np.nan),
+        "motor_from_px4_torque": np.full((n, 4), np.nan),
+        "phys_acc": np.full((n, 3), np.nan),
+        "phys_wdot": np.full((n, 3), np.nan),
+        "phys_force": np.full((n, 3), np.nan),
+        "phys_torque": np.full((n, 3), np.nan),
     }
 
     prev_vel = df.loc[0, ["vel_x", "vel_y", "vel_z"]].to_numpy(float)
+    prev_omega = df.loc[0, ["angular_vel_x", "angular_vel_y", "angular_vel_z"]].to_numpy(float)
     prev_acc = np.zeros(3)
     vel_int = np.zeros(3)
+    rate_int = np.zeros(3)
     hover_thrust = MPC_THR_HOVER
     last_hover_thrust_log = np.nan
     last_acc_sp = np.zeros(3)
@@ -491,6 +604,7 @@ def build_history(df, step_dt, rate_delay_steps=RATE_DELAY_STEPS, acc_delay_step
 
         s_next, prev_acc, vel_int, debug = cu_mpc_simulator_step(
             s, pos_sp, yaw_sp, prev_vel, prev_acc, vel_int, step_dt,
+            prev_omega=prev_omega, rate_int=rate_int,
             z_vel_max_up=z_vel_max_up, thrust_min=thrust_min,
             no_thrust=(not_taken_off or flying_but_ground_contact),
             hover_thrust=hover_thrust, tilt_limit=tilt_limit,
@@ -499,11 +613,17 @@ def build_history(df, step_dt, rate_delay_steps=RATE_DELAY_STEPS, acc_delay_step
             acc_delay_buffer=acc_delay_buffer,
             acc_delay_steps=acc_delay_steps,
         )
+        rate_int = debug.get("rate_int_next", rate_int)
         last_acc_sp = debug["acc_sp"].copy()
         pred_next[i] = s_next
         for key in calc:
-            calc[key][i] = debug[key]
+            if key in debug:
+                calc[key][i] = debug[key]
+        if all(col in row.index for col in ["torque_sp_x", "torque_sp_y", "torque_sp_z"]):
+            px4_torque = row[["torque_sp_x", "torque_sp_y", "torque_sp_z"]].to_numpy(float)
+            calc["motor_from_px4_torque"][i] = mix_px4_quad_x(debug["thr_sp"], px4_torque)
         prev_vel = s[[STATE_INDEX["vx"], STATE_INDEX["vy"], STATE_INDEX["vz"]]].copy()
+        prev_omega = s[[STATE_INDEX["wx"], STATE_INDEX["wy"], STATE_INDEX["wz"]]].copy()
 
     return actual, actual_next, pred_next, calc
 
@@ -529,6 +649,13 @@ def setpoint_legend_base(key):
         "att_sp": "attitude_setpoint",
         "rate_sp": "omega_setpoint",
         "thr_sp": "thrust_setpoint",
+        "torque_sp": "torque_setpoint",
+        "motor_sp": "actuator_motor",
+        "motor_from_px4_torque": "actuator_motor_from_px4_torque",
+        "phys_acc": "physical_acceleration",
+        "phys_wdot": "physical_angular_acceleration",
+        "phys_force": "physical_force_body",
+        "phys_torque": "physical_torque_body",
     }
     return bases.get(key, key)
 
@@ -540,11 +667,34 @@ def setpoint_component_name(key, axis):
         "att_sp": ["attitude_qw_setpoint", "attitude_qx_setpoint", "attitude_qy_setpoint", "attitude_qz_setpoint"],
         "rate_sp": ["roll_rate_setpoint", "pitch_rate_setpoint", "yaw_rate_setpoint"],
         "thr_sp": ["thrust_x_setpoint", "thrust_y_setpoint", "thrust_z_setpoint"],
+        "torque_sp": ["torque_x_setpoint", "torque_y_setpoint", "torque_z_setpoint"],
+        "motor_sp": ["actuator_motor_0", "actuator_motor_1", "actuator_motor_2", "actuator_motor_3"],
+        "motor_from_px4_torque": [
+            "actuator_motor_0_from_px4_torque",
+            "actuator_motor_1_from_px4_torque",
+            "actuator_motor_2_from_px4_torque",
+            "actuator_motor_3_from_px4_torque",
+        ],
+        "phys_acc": ["physical_acceleration_x", "physical_acceleration_y", "physical_acceleration_z"],
+        "phys_wdot": ["physical_angular_acceleration_x", "physical_angular_acceleration_y", "physical_angular_acceleration_z"],
+        "phys_force": ["physical_force_body_x", "physical_force_body_y", "physical_force_body_z"],
+        "phys_torque": ["physical_torque_body_x", "physical_torque_body_y", "physical_torque_body_z"],
     }
     names = components.get(key)
     if names is None or axis >= len(names):
         return setpoint_legend_base(key)
     return names[axis]
+
+
+def first_existing_column(df, columns):
+    if columns is None:
+        return None
+    if isinstance(columns, str):
+        columns = [columns]
+    for column in columns:
+        if column in df.columns:
+            return column
+    return None
 
 
 def attach_interactive_navigation(fig, ax, base_scale=1.2):
@@ -636,6 +786,10 @@ def main():
         "roll_rate": "wx", "rolll_rate": "wx", "pitch_rate": "wy", "yaw_rate": "wz",
         "local_sp_vx": "vel_sp_x", "local_sp_vy": "vel_sp_y", "local_sp_vz": "vel_sp_z",
         "local_sp_ax": "acc_sp_x", "local_sp_ay": "acc_sp_y", "local_sp_az": "acc_sp_z",
+        "thrust_x": "thr_sp_x", "thrust_y": "thr_sp_y", "thrust_z": "thr_sp_z",
+        "torque_x": "torque_sp_x", "torque_y": "torque_sp_y", "torque_z": "torque_sp_z",
+        "motor0": "actuator_motor_0", "motor1": "actuator_motor_1",
+        "motor2": "actuator_motor_2", "motor3": "actuator_motor_3",
     }
     requested_state = args.state.strip()
     delta_mode = requested_state.startswith("d") and len(requested_state) > 1
@@ -664,22 +818,93 @@ def main():
         "rate_sp_roll": ("rate_sp", 0, "rate_sp_roll"),
         "rate_sp_pitch": ("rate_sp", 1, "rate_sp_pitch"),
         "rate_sp_yaw": ("rate_sp", 2, "rate_sp_yaw"),
-        "thr_sp_x": ("thr_sp", 0, "rate_sp_thrust_x"),
-        "thr_sp_y": ("thr_sp", 1, "rate_sp_thrust_y"),
-        "thr_sp_z": ("thr_sp", 2, "rate_sp_thrust_z"),
+        "thr_sp_x": ("thr_sp", 0, ["thrust_sp_x", "rate_sp_thrust_x"]),
+        "thr_sp_y": ("thr_sp", 1, ["thrust_sp_y", "rate_sp_thrust_y"]),
+        "thr_sp_z": ("thr_sp", 2, ["thrust_sp_z", "rate_sp_thrust_z"]),
+        "torque_sp_x": ("torque_sp", 0, "torque_sp_x"),
+        "torque_sp_y": ("torque_sp", 1, "torque_sp_y"),
+        "torque_sp_z": ("torque_sp", 2, "torque_sp_z"),
+        "actuator_motor_0": ("motor_sp", 0, "actuator_motor_0"),
+        "actuator_motor_1": ("motor_sp", 1, "actuator_motor_1"),
+        "actuator_motor_2": ("motor_sp", 2, "actuator_motor_2"),
+        "actuator_motor_3": ("motor_sp", 3, "actuator_motor_3"),
+        "actuator_motor_0_px4mix": ("motor_from_px4_torque", 0, "actuator_motor_0"),
+        "actuator_motor_1_px4mix": ("motor_from_px4_torque", 1, "actuator_motor_1"),
+        "actuator_motor_2_px4mix": ("motor_from_px4_torque", 2, "actuator_motor_2"),
+        "actuator_motor_3_px4mix": ("motor_from_px4_torque", 3, "actuator_motor_3"),
+        "phys_acc_x": ("phys_acc", 0, None),
+        "phys_acc_y": ("phys_acc", 1, None),
+        "phys_acc_z": ("phys_acc", 2, None),
+        "phys_wdot_x": ("phys_wdot", 0, None),
+        "phys_wdot_y": ("phys_wdot", 1, None),
+        "phys_wdot_z": ("phys_wdot", 2, None),
+        "phys_force_x": ("phys_force", 0, None),
+        "phys_force_y": ("phys_force", 1, None),
+        "phys_force_z": ("phys_force", 2, None),
+        "phys_torque_x": ("phys_torque", 0, None),
+        "phys_torque_y": ("phys_torque", 1, None),
+        "phys_torque_z": ("phys_torque", 2, None),
+    }
+    setpoint_groups = {
+        "thrust": ["thr_sp_x", "thr_sp_y", "thr_sp_z"],
+        "thr_sp": ["thr_sp_x", "thr_sp_y", "thr_sp_z"],
+        "torque": ["torque_sp_x", "torque_sp_y", "torque_sp_z"],
+        "torque_sp": ["torque_sp_x", "torque_sp_y", "torque_sp_z"],
+        "actuator_motors": ["actuator_motor_0", "actuator_motor_1", "actuator_motor_2", "actuator_motor_3"],
+        "motors": ["actuator_motor_0", "actuator_motor_1", "actuator_motor_2", "actuator_motor_3"],
+        "actuator_motors_px4mix": [
+            "actuator_motor_0_px4mix",
+            "actuator_motor_1_px4mix",
+            "actuator_motor_2_px4mix",
+            "actuator_motor_3_px4mix",
+        ],
+        "phys_acc": ["phys_acc_x", "phys_acc_y", "phys_acc_z"],
+        "phys_wdot": ["phys_wdot_x", "phys_wdot_y", "phys_wdot_z"],
+        "phys_force": ["phys_force_x", "phys_force_y", "phys_force_z"],
+        "phys_torque": ["phys_torque_x", "phys_torque_y", "phys_torque_z"],
     }
 
     dual_state_plot = (not delta_mode) and (state in dynamics_sources or state in euler_sources)
-    if dual_state_plot:
+    group_plot = (not delta_mode) and state in setpoint_groups
+    if group_plot:
+        group_states = setpoint_groups[state]
+        fig, axes = plt.subplots(len(group_states), 1, figsize=(12, 2.8 * len(group_states)), sharex=True)
+        if len(group_states) == 1:
+            axes = [axes]
+        plt.subplots_adjust(bottom=0.12, hspace=0.35)
+        plot_title = state
+        for group_ax, group_state in zip(axes, group_states):
+            key, axis, log_col = setpoint_sources[group_state]
+            legend_base = setpoint_component_name(key, axis)
+            model_mask = finite_plot_mask(t, calc[key][:, axis]) & active_plot_mask
+            group_ax.plot(
+                plot_t[model_mask], calc[key][model_mask, axis],
+                color="tab:cyan", linewidth=2.0, label=f"{legend_base}_dynamics",
+            )
+            log_col = first_existing_column(df, log_col)
+            if log_col is not None:
+                log_value = df[log_col].to_numpy(float)
+                log_mask = finite_plot_mask(t, log_value) & active_plot_mask
+                group_ax.plot(
+                    plot_t[log_mask], log_value[log_mask],
+                    color="tab:orange", linestyle="--", linewidth=2.0, zorder=3,
+                    label=f"{legend_base}_px4",
+                )
+            group_ax.set_title(legend_base)
+            group_ax.set_ylabel("value")
+    elif dual_state_plot:
         fig, axes = plt.subplots(1, 2, figsize=(16, 5), sharex=True)
         ax = axes[0]
+        plt.subplots_adjust(bottom=0.18)
     else:
         fig, ax = plt.subplots(figsize=(12, 5))
         axes = [ax]
-    plt.subplots_adjust(bottom=0.18)
+        plt.subplots_adjust(bottom=0.18)
     plot_title = state
 
-    if state in setpoint_sources:
+    if group_plot:
+        pass
+    elif state in setpoint_sources:
         if delta_mode:
             print("[ERROR] d-prefix is only supported for states/euler angles, not setpoints")
             sys.exit(1)
@@ -688,7 +913,8 @@ def main():
         plot_title = legend_base
         model_mask = finite_plot_mask(t, calc[key][:, axis]) & active_plot_mask
         ax.plot(plot_t[model_mask], calc[key][model_mask, axis], color="tab:cyan", linewidth=2.0, label=f"{legend_base}_dynamics")
-        if log_col in df.columns:
+        log_col = first_existing_column(df, log_col)
+        if log_col is not None:
             log_value = df[log_col].to_numpy(float)
             log_mask = finite_plot_mask(t, log_value) & active_plot_mask
             ax.plot(
@@ -757,7 +983,7 @@ def main():
             ax.set_title(f"d{state_name}")
             ax.set_ylabel("")
     else:
-        valid = sorted(set(dynamics_sources) | set(euler_sources) | set(setpoint_sources))
+        valid = sorted(set(dynamics_sources) | set(euler_sources) | set(setpoint_sources) | set(setpoint_groups))
         print("[ERROR] state must be one of:")
         for name in valid:
             print(" ", name)
@@ -769,7 +995,7 @@ def main():
         f"rate_delay_steps={args.rate_delay_steps}, acc_delay_steps={args.acc_delay_steps}"
     )
     print(f"[INFO] plot samples: {int(np.count_nonzero(active_plot_mask))}/{len(active_plot_mask)} non-Idle")
-    if not dual_state_plot:
+    if not dual_state_plot and not group_plot:
         ax.set_title(plot_title)
     for plot_ax in axes:
         plot_ax.set_xlabel("time [s]")
