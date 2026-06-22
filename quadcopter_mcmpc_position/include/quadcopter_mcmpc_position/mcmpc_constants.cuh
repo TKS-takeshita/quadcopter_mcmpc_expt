@@ -51,7 +51,7 @@ namespace qc_mcmpc{
         float cost;
 
         __device__ void generate_input_array(curandState &state);
-        __device__ void do_simulation();
+        __device__ void do_simulation(int sample_id);
     };
 
     // __constant__ GPUメモリ上に展開する定数　(初期化時のみ変更)
@@ -111,6 +111,11 @@ namespace qc_mcmpc{
     extern __constant__ float square_waypoint_change_time_device;
     extern __constant__ float mcmpc_log_device;
     extern __constant__ float square_waypoints_device[_SQUARE_WAYPOINTS][3];
+    extern __constant__ int takeoff_state_device;
+    extern __constant__ float takeoff_tilt_limit_device;
+    extern __constant__ int landed_device;
+    extern __constant__ int ground_contact_device;
+    extern __constant__ int maybe_landed_device;
 
     extern void update_target_state_device();
 

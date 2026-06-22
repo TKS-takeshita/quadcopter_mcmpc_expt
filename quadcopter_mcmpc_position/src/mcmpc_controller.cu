@@ -75,6 +75,11 @@ namespace qc_mcmpc
         __constant__ float square_waypoint_change_time_device;
         __constant__ float mcmpc_log_device;
         __constant__ float square_waypoints_device[_SQUARE_WAYPOINTS][3];
+        __constant__ int takeoff_state_device;
+        __constant__ float takeoff_tilt_limit_device;
+        __constant__ int landed_device;
+        __constant__ int ground_contact_device;
+        __constant__ int maybe_landed_device;
 
 		__global__ static void init_curand_seed(curandState *state_array, int seed);
 	__global__ static void generate_input_samples_and_calc_costs(curandState *state, input_array* input_array_sample_device, float* cost_vec);
@@ -198,6 +203,20 @@ namespace qc_mcmpc
 
         cudaMemcpyToSymbol( control_period_device,        &CONST_PARAM_FLOAT::CONTROL_PERIOD,        sizeof( float ) );
         cudaMemcpyToSymbol( integration_step_size_device, &CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE, sizeof( float ) );
+        cudaMemcpyToSymbol( square_waypoints_device, CONST_PARAM_FLOAT::square_waypoints, sizeof(CONST_PARAM_FLOAT::square_waypoints) );
+
+        {
+            int takeoff_state_init = 5;
+            float takeoff_tilt_limit_init = 0.78539816339f;
+            int landed_init = 0;
+            int ground_contact_init = 0;
+            int maybe_landed_init = 0;
+            cudaMemcpyToSymbol(takeoff_state_device, &takeoff_state_init, sizeof(int));
+            cudaMemcpyToSymbol(takeoff_tilt_limit_device, &takeoff_tilt_limit_init, sizeof(float));
+            cudaMemcpyToSymbol(landed_device, &landed_init, sizeof(int));
+            cudaMemcpyToSymbol(ground_contact_device, &ground_contact_init, sizeof(int));
+            cudaMemcpyToSymbol(maybe_landed_device, &maybe_landed_init, sizeof(int));
+        }
 
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
         cudaMemcpyToSymbol( x_wall_device,        &CONST_PARAM_FLOAT::X_WALL,               sizeof( float ) );
@@ -228,7 +247,7 @@ namespace qc_mcmpc
 		int id = blockDim.x * blockIdx.x + threadIdx.x;
 
 		input_array_sample_device[id].generate_input_array(state[id]);
-		input_array_sample_device[id].do_simulation();
+		input_array_sample_device[id].do_simulation(id);
 
 		// sort用に, float配列にコストを同順でコピー
 		cost_vec[id] = input_array_sample_device[id].cost;

@@ -25,26 +25,26 @@
 
 #define _SQUARE_WAYPOINTS              7 // 7
 #define _SQUARE_WAYPOINT_THRESHOLD      0.15f
-#define _SQUARE_WAYPOINT_HOLD_SEC       1.0f
+#define _SQUARE_WAYPOINT_HOLD_SEC       0.0f
 
 // cost for MPC
 #define _COST_Q_X 		1.0f
 #define _COST_Q_Y 		1.0f
 #define _COST_Q_Z 		1.0f
-#define _COST_Q_XP 		5.0f
-#define _COST_Q_YP 		5.0f
-#define _COST_Q_ZP 		5.0f
-#define _COST_Q_E1 		1.0f
-#define _COST_Q_E2 		1.0f
-#define _COST_Q_E3 		1.0f
-#define _COST_Q_WX 		5.0f
-#define _COST_Q_WY 		5.0f
-#define _COST_Q_WZ 		5.0f
+#define _COST_Q_XP 		0.0f
+#define _COST_Q_YP 		0.0f
+#define _COST_Q_ZP 		0.0f
+#define _COST_Q_E1 		0.0f
+#define _COST_Q_E2 		0.0f
+#define _COST_Q_E3 		0.0f
+#define _COST_Q_WX 		0.0f
+#define _COST_Q_WY 		0.0f
+#define _COST_Q_WZ 		0.0f
 #define _COST_Q_ZI 		0.0f
-#define _COST_R_X 		0.1f
-#define _COST_R_Y 	    0.1f
-#define _COST_R_Z 	    0.1f
-#define _COST_R_YAW 	0.1f
+#define _COST_R_X 		0.0f
+#define _COST_R_Y 	    0.0f
+#define _COST_R_Z 	    0.0f
+#define _COST_R_YAW 	0.0f
 #ifdef MCMPC_WITH_FORCE_STATE
     #define _COST_Q_FX  1.0f
     #define _COST_Q_FY  1.0f

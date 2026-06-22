@@ -12,7 +12,7 @@ from matplotlib.collections import LineCollection
 from matplotlib.widgets import Slider
 
 
-default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260611_160418.csv"
+default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260618_084500.csv"
 
 dt = 0.02
 prediction_start_time = 0.5

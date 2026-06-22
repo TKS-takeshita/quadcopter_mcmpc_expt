@@ -5,6 +5,9 @@
 #include <px4_msgs/msg/vehicle_command.hpp>
 #include <px4_msgs/msg/vehicle_rates_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_local_position_setpoint.hpp>
+#include <px4_msgs/msg/hover_thrust_estimate.hpp>
+#include <px4_msgs/msg/takeoff_status.hpp>
+#include <px4_msgs/msg/vehicle_land_detected.hpp>
 
 #include <iostream>
 #include <iomanip>
@@ -25,10 +28,16 @@
 static bool has_traj_sp = false;
 static bool has_att_sp = false;
 static bool has_rate_sp = false;
+static bool has_hover_thrust = false;
+static bool has_takeoff_status = false;
+static bool has_land_detected = false;
 
 static px4_msgs::msg::VehicleLocalPositionSetpoint latest_traj_sp;
 static px4_msgs::msg::VehicleAttitudeSetpoint latest_att_sp;
 static px4_msgs::msg::VehicleRatesSetpoint latest_rate_sp;
+static px4_msgs::msg::HoverThrustEstimate latest_hover_thrust;
+static px4_msgs::msg::TakeoffStatus latest_takeoff_status;
+static px4_msgs::msg::VehicleLandDetected latest_land_detected;
 static std::mutex sp_mutex;
 
 #include "quadcopter_mcmpc_position/const_params.hpp"
@@ -62,7 +71,8 @@ static constexpr float TAKEOFF_Y = 0.0f;
 static constexpr float TAKEOFF_Z = -1.0f;
 static constexpr float SQUARE_Z = -1.0f;
 static constexpr float SQUARE_WAYPOINT_THRESHOLD = 0.15f;
-static constexpr float SQUARE_WAYPOINT_HOLD_SEC = 1.0f;
+static constexpr float SQUARE_WAYPOINT_HOLD_SEC = 0.0f;
+static constexpr int SQUARE_START_WAYPOINT_INDEX = 1;
 
 static uint64_t offboard_setpoint_counter = 0;
 float cost = 0.0f;
@@ -140,6 +150,12 @@ void reset_integrator_state()
 
 void set_square_waypoint(int index)
 {
+    if (index < SQUARE_START_WAYPOINT_INDEX) {
+        index = SQUARE_START_WAYPOINT_INDEX;
+    }
+    if (index >= _SQUARE_WAYPOINTS) {
+        index = _SQUARE_WAYPOINTS - 1;
+    }
     square_waypoint_index = index;
     square_waypoint_change_time = mcmpc_log;
     target_host.x = CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][0];
@@ -147,6 +163,9 @@ void set_square_waypoint(int index)
     target_host.z = SQUARE_Z;
     set_target_yaw(0.0f);
     update_target_state_device();
+    cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_index_device, &square_waypoint_index, sizeof(int));
+    cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_change_time_device, &square_waypoint_change_time, sizeof(float));
+    cudaMemcpyToSymbol(qc_mcmpc::mcmpc_log_device, &mcmpc_log, sizeof(float));
     RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
         "square waypoint %d/%d: x=%f y=%f z=%f",
         square_waypoint_index + 1,
@@ -160,8 +179,9 @@ void start_mcmpc_square()
 {
     mcmpc_running = true;
     control_mode = ControlMode::MCMPC_ATTITUDE;
+    mcmpc_log = 0.0f;
     reset_integrator_state();
-    set_square_waypoint(0);
+    set_square_waypoint(SQUARE_START_WAYPOINT_INDEX);
     RCLCPP_INFO(rclcpp::get_logger("mcmpc"), "A -> MCMPC square start");
 }
 
@@ -341,6 +361,30 @@ void rates_setpoint_callback(
     has_rate_sp = true;
 }
 
+void hover_thrust_estimate_callback(
+    const px4_msgs::msg::HoverThrustEstimate::SharedPtr msg)
+{
+    std::lock_guard<std::mutex> lock(sp_mutex);
+    latest_hover_thrust = *msg;
+    has_hover_thrust = true;
+}
+
+void takeoff_status_callback(
+    const px4_msgs::msg::TakeoffStatus::SharedPtr msg)
+{
+    std::lock_guard<std::mutex> lock(sp_mutex);
+    latest_takeoff_status = *msg;
+    has_takeoff_status = true;
+}
+
+void vehicle_land_detected_callback(
+    const px4_msgs::msg::VehicleLandDetected::SharedPtr msg)
+{
+    std::lock_guard<std::mutex> lock(sp_mutex);
+    latest_land_detected = *msg;
+    has_land_detected = true;
+}
+
 namespace quad_sim_base
 {
     void do_simulation(float var_array_to_integrate[]);
@@ -417,6 +461,9 @@ int main(int argc, char *argv[])
     auto traj_sp_sub = node->create_subscription<px4_msgs::msg::VehicleLocalPositionSetpoint>("/fmu/out/vehicle_local_position_setpoint", qos,trajectory_setpoint_callback);
     auto att_sp_sub = node->create_subscription<px4_msgs::msg::VehicleAttitudeSetpoint>("/fmu/out/vehicle_attitude_setpoint_v1",qos,attitude_setpoint_callback);
     auto rate_sp_sub = node->create_subscription<px4_msgs::msg::VehicleRatesSetpoint>("/fmu/out/vehicle_rates_setpoint",qos,rates_setpoint_callback);
+    auto hover_thrust_sub = node->create_subscription<px4_msgs::msg::HoverThrustEstimate>("/fmu/out/hover_thrust_estimate",qos,hover_thrust_estimate_callback);
+    auto takeoff_status_sub = node->create_subscription<px4_msgs::msg::TakeoffStatus>("/fmu/out/takeoff_status",qos,takeoff_status_callback);
+    auto land_detected_sub = node->create_subscription<px4_msgs::msg::VehicleLandDetected>("/fmu/out/vehicle_land_detected",qos,vehicle_land_detected_callback);
     float var_p_save[_DEVICE_CONST_HORIZON+1][_N_OF_ODES+1];
     for(int i= 0; i<_DEVICE_CONST_HORIZON+1; i++) {
         for(int j=0; j<_N_OF_ODES+1; j++){
@@ -448,6 +495,9 @@ int main(int argc, char *argv[])
     csv << ",px4_sp_q0,px4_sp_q1,px4_sp_q2,px4_sp_q3";
     csv << ",px4_sp_roll_rate,px4_sp_pitch_rate,px4_sp_yaw_rate";
     csv << ",px4_sp_thrust_x,px4_sp_thrust_y,px4_sp_thrust_z";
+    csv << ",hover_thrust,hover_thrust_valid";
+    csv << ",takeoff_state,takeoff_tilt_limit";
+    csv << ",landed,ground_contact,maybe_landed";
 
     csv << "\n";
     rclcpp::Rate rate(50);
@@ -478,6 +528,26 @@ int main(int argc, char *argv[])
         quad_sim_base::var_array_to_integrate[11] = msg->velocity[1];//vy
         quad_sim_base::var_array_to_integrate[12] = msg->velocity[2];//vz
 
+        {
+            std::lock_guard<std::mutex> sp_lock(sp_mutex);
+            float hover_thrust_for_model = CONST_PARAM_FLOAT::MPC_THR_HOVER;
+            if (has_hover_thrust && latest_hover_thrust.valid && std::isfinite(latest_hover_thrust.hover_thrust) && latest_hover_thrust.hover_thrust > 1.0e-6f) {
+                hover_thrust_for_model = latest_hover_thrust.hover_thrust;
+            }
+            int takeoff_state_for_model = has_takeoff_status ? static_cast<int>(latest_takeoff_status.takeoff_state) : 5;
+            float takeoff_tilt_limit_for_model = has_takeoff_status ? latest_takeoff_status.tilt_limit : 0.78539816339f;
+            int landed_for_model = (has_land_detected && latest_land_detected.landed) ? 1 : 0;
+            int ground_contact_for_model = (has_land_detected && latest_land_detected.ground_contact) ? 1 : 0;
+            int maybe_landed_for_model = (has_land_detected && latest_land_detected.maybe_landed) ? 1 : 0;
+
+            cudaMemcpyToSymbol(qc_mcmpc::mpc_thr_hover, &hover_thrust_for_model, sizeof(float));
+            cudaMemcpyToSymbol(qc_mcmpc::takeoff_state_device, &takeoff_state_for_model, sizeof(int));
+            cudaMemcpyToSymbol(qc_mcmpc::takeoff_tilt_limit_device, &takeoff_tilt_limit_for_model, sizeof(float));
+            cudaMemcpyToSymbol(qc_mcmpc::landed_device, &landed_for_model, sizeof(int));
+            cudaMemcpyToSymbol(qc_mcmpc::ground_contact_device, &ground_contact_for_model, sizeof(int));
+            cudaMemcpyToSymbol(qc_mcmpc::maybe_landed_device, &maybe_landed_for_model, sizeof(int));
+        }
+
         float vel_ref[3];
         float acc_now[3];
         vel_ref[0] = CONST_PARAM_FLOAT::MPC_XY_P * (target_host.x - quad_sim_base::var_array_to_integrate[7]);
@@ -502,6 +572,9 @@ int main(int argc, char *argv[])
             }
 
             // MPC計算はMCMPC中だけ実行する
+            cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_index_device, &square_waypoint_index, sizeof(int));
+            cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_change_time_device, &square_waypoint_change_time, sizeof(float));
+            cudaMemcpyToSymbol(qc_mcmpc::mcmpc_log_device, &mcmpc_log, sizeof(float));
             quad_sim_base::do_simulation(quad_sim_base::var_array_to_integrate);
         }
         
@@ -627,6 +700,28 @@ int main(int argc, char *argv[])
                         << "," << latest_rate_sp.thrust_body[2];
                 } else {
                     csv << ",nan,nan,nan,nan,nan,nan";
+                }
+
+                if (has_hover_thrust) {
+                    csv << "," << latest_hover_thrust.hover_thrust
+                        << "," << static_cast<int>(latest_hover_thrust.valid);
+                } else {
+                    csv << ",nan,nan";
+                }
+
+                if (has_takeoff_status) {
+                    csv << "," << static_cast<int>(latest_takeoff_status.takeoff_state)
+                        << "," << latest_takeoff_status.tilt_limit;
+                } else {
+                    csv << ",nan,nan";
+                }
+
+                if (has_land_detected) {
+                    csv << "," << static_cast<int>(latest_land_detected.landed)
+                        << "," << static_cast<int>(latest_land_detected.ground_contact)
+                        << "," << static_cast<int>(latest_land_detected.maybe_landed);
+                } else {
+                    csv << ",nan,nan,nan";
                 }
             }
 

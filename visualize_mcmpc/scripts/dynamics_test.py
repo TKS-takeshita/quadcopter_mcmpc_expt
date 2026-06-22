@@ -9,7 +9,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 
-DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_step3.csv"
+DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_step4.csv"
 
 DT = 0.02
 
@@ -36,6 +36,8 @@ MC_ROLL_P = 4.00
 MC_PITCH_P = 4.00
 MC_YAW_P = 2.80
 MPC_VELD_LP = 5.0
+RATE_DELAY_STEPS = 3
+ACC_DELAY_STEPS = 3
 
 TAKEOFF_STATE_DISARMED = 1
 TAKEOFF_STATE_SPOOLUP = 2
@@ -190,6 +192,8 @@ def cu_mpc_simulator_step(
     s, pos_sp, yaw_sp, prev_vel, prev_acc, vel_int, step_dt,
     z_vel_max_up=MPC_Z_VEL_MAX_UP, thrust_min=MPC_THR_MIN, no_thrust=False,
     hover_thrust=MPC_THR_HOVER, tilt_limit=MPC_TILT_MAX,
+    rate_delay_buffer=None, rate_delay_steps=0,
+    acc_delay_buffer=None, acc_delay_steps=0,
 ):
     # s:機体状態vec 
     var = np.asarray(s, dtype=float).copy()
@@ -221,6 +225,8 @@ def cu_mpc_simulator_step(
             "acc_sp": acc_setpoint,
             "att_sp": np.array([1.0, 0.0, 0.0, 0.0]),
             "rate_sp": np.zeros(3),
+            "rate_sp_used": np.zeros(3),
+            "acc_sp_used": np.zeros(3),
             "thr_sp": thrust_setpoint,
         }
     # 位置制御のP制御で速度目標値を計算
@@ -317,6 +323,7 @@ def cu_mpc_simulator_step(
     body_y = np.cross(att_body_z, body_x)
     att_setpoint = rotmat_to_quat(body_x, body_y, att_body_z)
 
+    # 目標姿勢と現在姿勢の内積から、目標角速度を計算
     qe0 = np.dot(var[0:4], att_setpoint)
     sgn = 1.0 if qe0 >= 0.0 else -1.0
     omega_setpoint = np.array([
@@ -327,13 +334,31 @@ def cu_mpc_simulator_step(
 
     v_prev = vel_prev_state.copy()
     w_prev = var[[STATE_INDEX["wx"], STATE_INDEX["wy"], STATE_INDEX["wz"]]].copy()
+    acc_for_dynamics = np.array([
+        acc_sp_xy_produced[0],
+        acc_sp_xy_produced[1],
+        acc_setpoint[2],
+    ])
+    if acc_delay_buffer is not None and acc_delay_steps > 0:
+        while len(acc_delay_buffer) < acc_delay_steps:
+            acc_delay_buffer.append(acc_for_dynamics.copy())
+        acc_delay_buffer.append(acc_for_dynamics.copy())
+        acc_for_dynamics = acc_delay_buffer.pop(0)
+
+    omega_for_dynamics = omega_setpoint
+    if rate_delay_buffer is not None and rate_delay_steps > 0:
+        while len(rate_delay_buffer) < rate_delay_steps:
+            rate_delay_buffer.append(w_prev.copy())
+        rate_delay_buffer.append(omega_setpoint.copy())
+        omega_for_dynamics = rate_delay_buffer.pop(0)
+
     next_var = var.copy()
     next_var[STATE_INDEX["x"]] += v_prev[0] * step_dt
     next_var[STATE_INDEX["y"]] += v_prev[1] * step_dt
     next_var[STATE_INDEX["z"]] += v_prev[2] * step_dt
-    next_var[STATE_INDEX["vx"]] = v_prev[0] + acc_sp_xy_produced[0] * step_dt
-    next_var[STATE_INDEX["vy"]] = v_prev[1] + acc_sp_xy_produced[1] * step_dt
-    next_var[STATE_INDEX["vz"]] = v_prev[2] + acc_setpoint[2] * step_dt
+    next_var[STATE_INDEX["vx"]] = v_prev[0] + acc_for_dynamics[0] * step_dt
+    next_var[STATE_INDEX["vy"]] = v_prev[1] + acc_for_dynamics[1] * step_dt
+    next_var[STATE_INDEX["vz"]] = v_prev[2] + acc_for_dynamics[2] * step_dt
 
     q_dot = np.array([
         -0.5 * (q_prev[1] * w_prev[0] + q_prev[2] * w_prev[1] + q_prev[3] * w_prev[2]),
@@ -342,9 +367,9 @@ def cu_mpc_simulator_step(
         0.5 * (q_prev[0] * w_prev[2] + q_prev[1] * w_prev[1] - q_prev[2] * w_prev[0]),
     ])
     next_var[0:4] = normalize(q_prev + q_dot * step_dt)
-    next_var[STATE_INDEX["wx"]] = omega_setpoint[0]
-    next_var[STATE_INDEX["wy"]] = omega_setpoint[1]
-    next_var[STATE_INDEX["wz"]] = omega_setpoint[2]
+    next_var[STATE_INDEX["wx"]] = omega_for_dynamics[0]
+    next_var[STATE_INDEX["wy"]] = omega_for_dynamics[1]
+    next_var[STATE_INDEX["wz"]] = omega_for_dynamics[2]
 
     vel_int_next = vel_int.copy()
     vel_int_next[0] += vel_error_for_int[0] * MPC_XY_VEL_I_ACC * step_dt
@@ -357,11 +382,13 @@ def cu_mpc_simulator_step(
         "acc_sp": acc_setpoint,
         "att_sp": att_setpoint,
         "rate_sp": omega_setpoint,
+        "rate_sp_used": omega_for_dynamics,
+        "acc_sp_used": acc_for_dynamics,
         "thr_sp": thrust_setpoint,
     }
 
 
-def build_history(df, step_dt):
+def build_history(df, step_dt, rate_delay_steps=RATE_DELAY_STEPS, acc_delay_steps=ACC_DELAY_STEPS):
     n = len(df)
     pred_next = np.full((n, len(STATE_NAMES)), np.nan)
     actual = np.full((n, len(STATE_NAMES)), np.nan)
@@ -380,6 +407,8 @@ def build_history(df, step_dt):
     hover_thrust = MPC_THR_HOVER
     last_hover_thrust_log = np.nan
     last_acc_sp = np.zeros(3)
+    rate_delay_buffer = []
+    acc_delay_buffer = []
     takeoff_ramp_vz_init = -A_OF_GRAVITY / max(MPC_Z_VEL_P_ACC, 0.01)
     takeoff_ramp_progress = 0.0
     takeoff_state = TAKEOFF_STATE_SPOOLUP
@@ -465,6 +494,10 @@ def build_history(df, step_dt):
             z_vel_max_up=z_vel_max_up, thrust_min=thrust_min,
             no_thrust=(not_taken_off or flying_but_ground_contact),
             hover_thrust=hover_thrust, tilt_limit=tilt_limit,
+            rate_delay_buffer=rate_delay_buffer,
+            rate_delay_steps=rate_delay_steps,
+            acc_delay_buffer=acc_delay_buffer,
+            acc_delay_steps=acc_delay_steps,
         )
         last_acc_sp = debug["acc_sp"].copy()
         pred_next[i] = s_next
@@ -498,6 +531,20 @@ def setpoint_legend_base(key):
         "thr_sp": "thrust_setpoint",
     }
     return bases.get(key, key)
+
+
+def setpoint_component_name(key, axis):
+    components = {
+        "vel_sp": ["velocity_x_setpoint", "velocity_y_setpoint", "velocity_z_setpoint"],
+        "acc_sp": ["acceleration_x_setpoint", "acceleration_y_setpoint", "acceleration_z_setpoint"],
+        "att_sp": ["attitude_qw_setpoint", "attitude_qx_setpoint", "attitude_qy_setpoint", "attitude_qz_setpoint"],
+        "rate_sp": ["roll_rate_setpoint", "pitch_rate_setpoint", "yaw_rate_setpoint"],
+        "thr_sp": ["thrust_x_setpoint", "thrust_y_setpoint", "thrust_z_setpoint"],
+    }
+    names = components.get(key)
+    if names is None or axis >= len(names):
+        return setpoint_legend_base(key)
+    return names[axis]
 
 
 def attach_interactive_navigation(fig, ax, base_scale=1.2):
@@ -558,6 +605,8 @@ def main():
     parser.add_argument("state", nargs="?", default="wx")
     parser.add_argument("csv_path", nargs="?", default=DEFAULT_CSV)
     parser.add_argument("--dt", type=float, default=DT)
+    parser.add_argument("--rate-delay-steps", type=int, default=RATE_DELAY_STEPS)
+    parser.add_argument("--acc-delay-steps", type=int, default=ACC_DELAY_STEPS)
     args = parser.parse_args()
 
     df = pd.read_csv(args.csv_path)
@@ -567,7 +616,12 @@ def main():
     finite_dt = t_diff[np.isfinite(t_diff) & (t_diff > 0.0)]
     csv_dt = float(np.median(finite_dt)) if len(finite_dt) > 0 else args.dt
 
-    actual, actual_next, pred_next, calc = build_history(df, args.dt)
+    actual, actual_next, pred_next, calc = build_history(
+        df,
+        args.dt,
+        rate_delay_steps=args.rate_delay_steps,
+        acc_delay_steps=args.acc_delay_steps,
+    )
     active_plot_mask = non_idle_plot_mask(df)
     if np.any(active_plot_mask):
         plot_t = t - t[np.flatnonzero(active_plot_mask)[0]]
@@ -579,11 +633,14 @@ def main():
         "pos_x": "x", "pos_y": "y", "pos_z": "z",
         "vel_x": "vx", "vel_y": "vy", "vel_z": "vz",
         "angular_vel_x": "wx", "angular_vel_y": "wy", "angular_vel_z": "wz",
-        "roll_rate": "wx", "pitch_rate": "wy", "yaw_rate": "wz",
+        "roll_rate": "wx", "rolll_rate": "wx", "pitch_rate": "wy", "yaw_rate": "wz",
         "local_sp_vx": "vel_sp_x", "local_sp_vy": "vel_sp_y", "local_sp_vz": "vel_sp_z",
         "local_sp_ax": "acc_sp_x", "local_sp_ay": "acc_sp_y", "local_sp_az": "acc_sp_z",
     }
-    state = state_aliases.get(args.state, args.state)
+    requested_state = args.state.strip()
+    delta_mode = requested_state.startswith("d") and len(requested_state) > 1
+    state_name = requested_state[1:] if delta_mode else requested_state
+    state = state_aliases.get(state_name, state_name)
 
     dynamics_sources = {
         "q0": STATE_INDEX["e0"], "q1": STATE_INDEX["e1"],
@@ -612,13 +669,22 @@ def main():
         "thr_sp_z": ("thr_sp", 2, "rate_sp_thrust_z"),
     }
 
-    fig, ax = plt.subplots(figsize=(12, 5))
+    dual_state_plot = (not delta_mode) and (state in dynamics_sources or state in euler_sources)
+    if dual_state_plot:
+        fig, axes = plt.subplots(1, 2, figsize=(16, 5), sharex=True)
+        ax = axes[0]
+    else:
+        fig, ax = plt.subplots(figsize=(12, 5))
+        axes = [ax]
     plt.subplots_adjust(bottom=0.18)
     plot_title = state
 
     if state in setpoint_sources:
+        if delta_mode:
+            print("[ERROR] d-prefix is only supported for states/euler angles, not setpoints")
+            sys.exit(1)
         key, axis, log_col = setpoint_sources[state]
-        legend_base = setpoint_legend_base(key)
+        legend_base = setpoint_component_name(key, axis)
         plot_title = legend_base
         model_mask = finite_plot_mask(t, calc[key][:, axis]) & active_plot_mask
         ax.plot(plot_t[model_mask], calc[key][model_mask, axis], color="tab:cyan", linewidth=2.0, label=f"{legend_base}_dynamics")
@@ -633,25 +699,63 @@ def main():
         ax.set_ylabel("setpoint")
     elif state in dynamics_sources:
         idx = dynamics_sources[state]
-        model_delta = pred_next[:, idx] - actual[:, idx]
-        log_delta = actual_next[:, idx] - actual[:, idx]
-        mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
-        plot_title = f"d{state}"
-        ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state}_model")
-        ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linewidth=2.0, label=f"d{state}_dynamics")
-        ax.set_ylabel("1step delta")
+        if delta_mode:
+            model_delta = pred_next[:, idx] - actual[:, idx]
+            log_delta = actual_next[:, idx] - actual[:, idx]
+            mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
+            plot_title = f"d{state_name}"
+            ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
+            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"d{state_name}_actual")
+            ax.set_ylabel("")
+        else:
+            actual_value = actual[:, idx]
+            model_value = pred_next[:, idx]
+            actual_mask = finite_plot_mask(t, actual_value) & active_plot_mask
+            model_mask = finite_plot_mask(t, model_value) & active_plot_mask
+            plot_title = state_name
+            ax.plot(plot_t[actual_mask], actual_value[actual_mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"{state_name}_actual")
+            ax.plot(plot_t[model_mask] + args.dt, model_value[model_mask], color="tab:cyan", linewidth=2.0, label=f"{state_name}_model")
+            ax.set_title(state_name)
+            ax.set_ylabel("state")
+            ax = axes[1]
+            model_delta = pred_next[:, idx] - actual[:, idx]
+            log_delta = actual_next[:, idx] - actual[:, idx]
+            mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
+            ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
+            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"d{state_name}_actual")
+            ax.set_title(f"d{state_name}")
+            ax.set_ylabel("")
     elif state in euler_sources:
         axis = euler_sources[state]
         pred_euler = np.array([quat_to_euler(q) for q in pred_next[:, 0:4]])
         actual_euler = np.array([quat_to_euler(q) for q in actual[:, 0:4]])
         actual_next_euler = np.array([quat_to_euler(q) if np.all(np.isfinite(q)) else [np.nan, np.nan, np.nan] for q in actual_next[:, 0:4]])
-        model_delta = pred_euler[:, axis] - actual_euler[:, axis]
-        log_delta = actual_next_euler[:, axis] - actual_euler[:, axis]
-        mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
-        plot_title = f"d{state}"
-        ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state}_model")
-        ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linewidth=2.0, label=f"d{state}_dynamics")
-        ax.set_ylabel("1step delta")
+        if delta_mode:
+            model_delta = pred_euler[:, axis] - actual_euler[:, axis]
+            log_delta = actual_next_euler[:, axis] - actual_euler[:, axis]
+            mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
+            plot_title = f"d{state_name}"
+            ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
+            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"d{state_name}_actual")
+            ax.set_ylabel("")
+        else:
+            actual_value = actual_euler[:, axis]
+            model_value = pred_euler[:, axis]
+            actual_mask = finite_plot_mask(t, actual_value) & active_plot_mask
+            model_mask = finite_plot_mask(t, model_value) & active_plot_mask
+            plot_title = state_name
+            ax.plot(plot_t[actual_mask], actual_value[actual_mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"{state_name}_actual")
+            ax.plot(plot_t[model_mask] + args.dt, model_value[model_mask], color="tab:cyan", linewidth=2.0, label=f"{state_name}_model")
+            ax.set_title(state_name)
+            ax.set_ylabel("state")
+            ax = axes[1]
+            model_delta = pred_euler[:, axis] - actual_euler[:, axis]
+            log_delta = actual_next_euler[:, axis] - actual_euler[:, axis]
+            mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
+            ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
+            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"d{state_name}_actual")
+            ax.set_title(f"d{state_name}")
+            ax.set_ylabel("")
     else:
         valid = sorted(set(dynamics_sources) | set(euler_sources) | set(setpoint_sources))
         print("[ERROR] state must be one of:")
@@ -660,15 +764,20 @@ def main():
         sys.exit(1)
 
     print(f"[INFO] csv={args.csv_path}")
-    print(f"[INFO] state={state}, model_dt={args.dt:.6f}, csv_dt={csv_dt:.6f}")
+    print(
+        f"[INFO] state={state}, model_dt={args.dt:.6f}, csv_dt={csv_dt:.6f}, "
+        f"rate_delay_steps={args.rate_delay_steps}, acc_delay_steps={args.acc_delay_steps}"
+    )
     print(f"[INFO] plot samples: {int(np.count_nonzero(active_plot_mask))}/{len(active_plot_mask)} non-Idle")
-    ax.set_title(plot_title)
-    ax.set_xlabel("time [s]")
-    ax.grid()
-    ax.legend(fontsize=12)
-    ax.relim()
-    ax.autoscale_view()
-    attach_interactive_navigation(fig, ax)
+    if not dual_state_plot:
+        ax.set_title(plot_title)
+    for plot_ax in axes:
+        plot_ax.set_xlabel("time [s]")
+        plot_ax.grid()
+        plot_ax.legend(fontsize=12)
+        plot_ax.relim()
+        plot_ax.autoscale_view()
+        attach_interactive_navigation(fig, plot_ax)
     plt.show()
 
 

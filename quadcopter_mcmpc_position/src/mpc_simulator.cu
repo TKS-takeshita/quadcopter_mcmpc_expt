@@ -137,7 +137,7 @@ namespace qc_mcmpc
 #endif
     }
 
-    __device__ void input_array::do_simulation()
+    __device__ void input_array::do_simulation(int sample_id)
     {
         cost = 0.0f;
 
@@ -170,18 +170,39 @@ namespace qc_mcmpc
         float att_setpoint[4];
         float thrust_setpoint[3];
         float omega_setpoint[3];
-        const float model_vel_a[3] = {1.0096476f, 1.0116026f, 0.99311937f};
-        const float model_vel_b[3] = {0.012726781f, 0.013022681f, 0.00016697574f};
-        const float model_w_c[3] = {0.81389003f, 0.81882324f, 0.99194815f};
-        const float model_w_d[3] = {0.12783148f, 0.10071088f, -6.9079037e-05f};
-        const float model_pos_alpha[3] = {0.46913642f, 0.47037031f, 0.48688093f};
-        const float model_att_beta = 0.41367774f;
+        const int rate_delay_steps = 3;
+        const int acc_delay_steps = 3;
+        float rate_delay_buffer[rate_delay_steps][3];
+        float acc_delay_buffer[acc_delay_steps][3];
+        for (int d = 0; d < rate_delay_steps; d++) {
+            rate_delay_buffer[d][0] = var_and_z_i_temp[4];
+            rate_delay_buffer[d][1] = var_and_z_i_temp[5];
+            rate_delay_buffer[d][2] = var_and_z_i_temp[6];
+        }
+        for (int d = 0; d < acc_delay_steps; d++) {
+            acc_delay_buffer[d][0] = 0.0f;
+            acc_delay_buffer[d][1] = 0.0f;
+            acc_delay_buffer[d][2] = 0.0f;
+        }
 
         int pred_wp_index = square_waypoint_index_device;
+        if (pred_wp_index < 1) {
+            pred_wp_index = 1;
+        }
+        if (pred_wp_index >= _SQUARE_WAYPOINTS) {
+            pred_wp_index = _SQUARE_WAYPOINTS - 1;
+        }
         float pred_wp_change_time = square_waypoint_change_time_device;
-        float pred_target_x = square_waypoints_device[pred_wp_index][0];
-        float pred_target_y = square_waypoints_device[pred_wp_index][1];
-        float pred_target_z = square_waypoints_device[pred_wp_index][2];
+        float pred_target_x = target_state_device.x;
+        float pred_target_y = target_state_device.y;
+        float pred_target_z = target_state_device.z;
+        for (int wp = pred_wp_index; wp < _SQUARE_WAYPOINTS; wp++) {
+            if (fabsf(square_waypoints_device[wp][0] - pred_target_x) < 1.0e-4f &&
+                fabsf(square_waypoints_device[wp][1] - pred_target_y) < 1.0e-4f) {
+                pred_wp_index = wp;
+                break;
+            }
+        }
 
         // 内部で位置/ヨー入力からsetpointを計算し，同定済み離散モデルで状態遷移する
         for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
@@ -191,6 +212,18 @@ namespace qc_mcmpc
             float y_ref   = decoupled_position[i][y];
             float z_ref   = decoupled_position[i][z];
             float yaw_ref = decoupled_position[i][yaw];
+            bool flying = takeoff_state_device >= 5;
+            bool flying_but_ground_contact = flying && (ground_contact_device || maybe_landed_device);
+            bool no_thrust = (takeoff_state_device < 4) || flying_but_ground_contact;
+            float thrust_min = flying ? 0.1f : 0.0f;
+            float tilt_limit = takeoff_tilt_limit_device;
+            if (!isfinite(tilt_limit) || tilt_limit <= 0.0f) {
+                tilt_limit = 0.78539816339f;
+            }
+            float hover_thrust = mpc_thr_hover;
+            if (!isfinite(hover_thrust) || hover_thrust < 1.0e-6f) {
+                hover_thrust = 0.60f;
+            }
 
             vel_setpoint[0] = mpc_xy_p * (x_ref - var_and_z_i_temp[7]);
             vel_setpoint[1] = mpc_xy_p * (y_ref - var_and_z_i_temp[8]);
@@ -241,10 +274,9 @@ namespace qc_mcmpc
             body_z[1] *= bz_norm_inv;
             body_z[2] *= bz_norm_inv;
 
-            const float mpc_tilt_max = 0.78539816339f;
             float dot_z = fminf(fmaxf(body_z[2], -1.0f), 1.0f);
             float tilt_angle = acosf(dot_z);
-            if (tilt_angle > mpc_tilt_max) {
+            if (tilt_angle > tilt_limit) {
                 float rejection[3];
                 rejection[0] = body_z[0];
                 rejection[1] = body_z[1];
@@ -257,23 +289,33 @@ namespace qc_mcmpc
                 }
                 rejection[0] /= rejection_norm;
                 rejection[1] /= rejection_norm;
-                body_z[0] = sinf(mpc_tilt_max) * rejection[0];
-                body_z[1] = sinf(mpc_tilt_max) * rejection[1];
-                body_z[2] = cosf(mpc_tilt_max);
+                body_z[0] = sinf(tilt_limit) * rejection[0];
+                body_z[1] = sinf(tilt_limit) * rejection[1];
+                body_z[2] = cosf(tilt_limit);
             }
 
-            float thrust_ned_z = acc_setpoint[2] * (mpc_thr_hover / a_of_gravity_device) - mpc_thr_hover;
+            if (no_thrust) {
+                acc_setpoint[0] = 0.0f;
+                acc_setpoint[1] = 0.0f;
+                acc_setpoint[2] = 100.0f;
+            }
+
+            float thrust_ned_z = acc_setpoint[2] * (hover_thrust / a_of_gravity_device) - hover_thrust;
             float cos_ned_body = body_z[2];
             if (fabsf(cos_ned_body) < 1.0e-6f) cos_ned_body = 1.0e-6f;
 
-            const float mpc_thr_min = 0.1f;
             const float mpc_thr_max = 0.9f;
             const float mpc_thr_xy_margin = 0.3f;
 
-            float collective_thrust = fminf(thrust_ned_z / cos_ned_body, -mpc_thr_min);
+            float collective_thrust = fminf(thrust_ned_z / cos_ned_body, -thrust_min);
             thrust_setpoint[0] = body_z[0] * collective_thrust;
             thrust_setpoint[1] = body_z[1] * collective_thrust;
             thrust_setpoint[2] = body_z[2] * collective_thrust;
+            if (no_thrust) {
+                thrust_setpoint[0] = 0.0f;
+                thrust_setpoint[1] = 0.0f;
+                thrust_setpoint[2] = 0.0f;
+            }
 
             // mcmpc_viewer と同じ thrust saturation
             float thrust_sp_xy_norm = sqrtf(thrust_setpoint[0]*thrust_setpoint[0] + thrust_setpoint[1]*thrust_setpoint[1]);
@@ -289,13 +331,23 @@ namespace qc_mcmpc
                 thrust_setpoint[1] = thrust_setpoint[1] / thrust_sp_xy_norm * thrust_max_xy;
             }
 
+            float acc_sp_xy_produced[2];
+            acc_sp_xy_produced[0] = thrust_setpoint[0] * (a_of_gravity_device / hover_thrust);
+            acc_sp_xy_produced[1] = thrust_setpoint[1] * (a_of_gravity_device / hover_thrust);
+
             float vel_error_for_int[3];
             vel_error_for_int[0] = vel_error[0];
             vel_error_for_int[1] = vel_error[1];
             vel_error_for_int[2] = vel_error[2];
-            if ((thrust_setpoint[2] >= -mpc_thr_min && vel_error_for_int[2] >= 0.0f) ||
+            if ((thrust_setpoint[2] >= -thrust_min && vel_error_for_int[2] >= 0.0f) ||
                 (thrust_setpoint[2] <= -mpc_thr_max && vel_error_for_int[2] <= 0.0f)) {
                 vel_error_for_int[2] = 0.0f;
+            }
+            if (acc_setpoint[0] * acc_setpoint[0] + acc_setpoint[1] * acc_setpoint[1] >
+                acc_sp_xy_produced[0] * acc_sp_xy_produced[0] + acc_sp_xy_produced[1] * acc_sp_xy_produced[1]) {
+                float xy_arw_gain = 2.0f / mpc_xy_vel_p_acc;
+                vel_error_for_int[0] -= xy_arw_gain * (acc_setpoint[0] - acc_sp_xy_produced[0]);
+                vel_error_for_int[1] -= xy_arw_gain * (acc_setpoint[1] - acc_sp_xy_produced[1]);
             }
 
             float att_body_z[3];
@@ -401,14 +453,51 @@ namespace qc_mcmpc
                 var_and_z_i_temp[5],
                 var_and_z_i_temp[6],
             };
+            float acc_for_dynamics[3] = {
+                acc_sp_xy_produced[0],
+                acc_sp_xy_produced[1],
+                acc_setpoint[2],
+            };
+            float omega_for_dynamics[3] = {
+                omega_setpoint[0],
+                omega_setpoint[1],
+                omega_setpoint[2],
+            };
+            if (i == 0) {
+                for (int d = 0; d < acc_delay_steps; d++) {
+                    acc_delay_buffer[d][0] = acc_for_dynamics[0];
+                    acc_delay_buffer[d][1] = acc_for_dynamics[1];
+                    acc_delay_buffer[d][2] = acc_for_dynamics[2];
+                }
+            }
+            for (int axis = 0; axis < 3; axis++) {
+                acc_for_dynamics[axis] = acc_delay_buffer[0][axis];
+                omega_for_dynamics[axis] = rate_delay_buffer[0][axis];
+            }
+            for (int d = 0; d < acc_delay_steps - 1; d++) {
+                acc_delay_buffer[d][0] = acc_delay_buffer[d + 1][0];
+                acc_delay_buffer[d][1] = acc_delay_buffer[d + 1][1];
+                acc_delay_buffer[d][2] = acc_delay_buffer[d + 1][2];
+            }
+            acc_delay_buffer[acc_delay_steps - 1][0] = acc_sp_xy_produced[0];
+            acc_delay_buffer[acc_delay_steps - 1][1] = acc_sp_xy_produced[1];
+            acc_delay_buffer[acc_delay_steps - 1][2] = acc_setpoint[2];
+            for (int d = 0; d < rate_delay_steps - 1; d++) {
+                rate_delay_buffer[d][0] = rate_delay_buffer[d + 1][0];
+                rate_delay_buffer[d][1] = rate_delay_buffer[d + 1][1];
+                rate_delay_buffer[d][2] = rate_delay_buffer[d + 1][2];
+            }
+            rate_delay_buffer[rate_delay_steps - 1][0] = omega_setpoint[0];
+            rate_delay_buffer[rate_delay_steps - 1][1] = omega_setpoint[1];
+            rate_delay_buffer[rate_delay_steps - 1][2] = omega_setpoint[2];
 
-            var_and_z_i_temp[7] += model_pos_alpha[0] * v_prev[0] * control_period_device;
-            var_and_z_i_temp[8] += model_pos_alpha[1] * v_prev[1] * control_period_device;
-            var_and_z_i_temp[9] += model_pos_alpha[2] * v_prev[2] * control_period_device;
+            var_and_z_i_temp[7] += v_prev[0] * control_period_device;
+            var_and_z_i_temp[8] += v_prev[1] * control_period_device;
+            var_and_z_i_temp[9] += v_prev[2] * control_period_device;
 
-            var_and_z_i_temp[10] = model_vel_a[0] * v_prev[0] + model_vel_b[0] * acc_setpoint[0];
-            var_and_z_i_temp[11] = model_vel_a[1] * v_prev[1] + model_vel_b[1] * acc_setpoint[1];
-            var_and_z_i_temp[12] = model_vel_a[2] * v_prev[2] + model_vel_b[2] * acc_setpoint[2];
+            var_and_z_i_temp[10] = v_prev[0] + acc_for_dynamics[0] * control_period_device;
+            var_and_z_i_temp[11] = v_prev[1] + acc_for_dynamics[1] * control_period_device;
+            var_and_z_i_temp[12] = v_prev[2] + acc_for_dynamics[2] * control_period_device;
 
             float q_dot[4];
             q_dot[0] = -0.5f * (q_prev[1] * w_prev[0] + q_prev[2] * w_prev[1] + q_prev[3] * w_prev[2]);
@@ -416,10 +505,10 @@ namespace qc_mcmpc
             q_dot[2] =  0.5f * (q_prev[0] * w_prev[1] - q_prev[1] * w_prev[2] + q_prev[3] * w_prev[0]);
             q_dot[3] =  0.5f * (q_prev[0] * w_prev[2] + q_prev[1] * w_prev[1] - q_prev[2] * w_prev[0]);
 
-            var_and_z_i_temp[0] = q_prev[0] + model_att_beta * q_dot[0] * control_period_device;
-            var_and_z_i_temp[1] = q_prev[1] + model_att_beta * q_dot[1] * control_period_device;
-            var_and_z_i_temp[2] = q_prev[2] + model_att_beta * q_dot[2] * control_period_device;
-            var_and_z_i_temp[3] = q_prev[3] + model_att_beta * q_dot[3] * control_period_device;
+            var_and_z_i_temp[0] = q_prev[0] + q_dot[0] * control_period_device;
+            var_and_z_i_temp[1] = q_prev[1] + q_dot[1] * control_period_device;
+            var_and_z_i_temp[2] = q_prev[2] + q_dot[2] * control_period_device;
+            var_and_z_i_temp[3] = q_prev[3] + q_dot[3] * control_period_device;
 
             float q_norm_inv = rsqrtf(
                 var_and_z_i_temp[0] * var_and_z_i_temp[0] +
@@ -432,9 +521,9 @@ namespace qc_mcmpc
             var_and_z_i_temp[2] *= q_norm_inv;
             var_and_z_i_temp[3] *= q_norm_inv;
 
-            var_and_z_i_temp[4] = model_w_c[0] * w_prev[0] + model_w_d[0] * omega_setpoint[0];
-            var_and_z_i_temp[5] = model_w_c[1] * w_prev[1] + model_w_d[1] * omega_setpoint[1];
-            var_and_z_i_temp[6] = model_w_c[2] * w_prev[2] + model_w_d[2] * omega_setpoint[2];
+            var_and_z_i_temp[4] = omega_for_dynamics[0];
+            var_and_z_i_temp[5] = omega_for_dynamics[1];
+            var_and_z_i_temp[6] = omega_for_dynamics[2];
 
             var_and_z_i_temp[_N_OF_ODES] += var_and_z_i_temp[9] * control_period_device;
 
@@ -468,6 +557,21 @@ namespace qc_mcmpc
                 pred_target_x = square_waypoints_device[pred_wp_index][0];
                 pred_target_y = square_waypoints_device[pred_wp_index][1];
                 pred_target_z = square_waypoints_device[pred_wp_index][2];
+                if (sample_id == 0) {
+                    printf(
+                        "[mcmpc gpu] pred target advanced: h=%d t=%.3f wp=%d target=(%.3f, %.3f, %.3f) pos=(%.3f, %.3f, %.3f) err=%.3f\n",
+                        i + 1,
+                        pred_time,
+                        pred_wp_index,
+                        pred_target_x,
+                        pred_target_y,
+                        pred_target_z,
+                        var_and_z_i_temp[7],
+                        var_and_z_i_temp[8],
+                        var_and_z_i_temp[9],
+                        waypoint_error
+                    );
+                }
             }
 
             // コストの計算

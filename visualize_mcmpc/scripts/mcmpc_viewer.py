@@ -11,13 +11,15 @@ from matplotlib.widgets import Slider
 from matplotlib.collections import LineCollection
 
 
-default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260611_160418.csv"
+default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260618_084500.csv"
 
 # ===== basic settings =====
 dt = 0.02
 horizon = 75
 prediction_start_time = 0.1
 prediction_interval = 1.5
+RATE_DELAY_STEPS = 3
+ACC_DELAY_STEPS = 3
 
 SQUARE_Z = -1.0
 SQUARE_WAYPOINT_THRESHOLD = 0.15
@@ -101,7 +103,7 @@ else:
     ARW_GAIN = 2.0 / MPC_XY_VEL_P_ACC
     
 
-# ===== identified internal model in mpc_simulator.cu =====
+# ===== legacy identified internal model coefficients =====
 MODEL_VEL_A = np.array([1.0096476, 1.0116026, 0.99311937])
 MODEL_VEL_B = np.array([0.012726781, 0.013022681, 0.00016697574])
 MODEL_W_C = np.array([0.81389003, 0.81882324, 0.99194815])
@@ -533,40 +535,6 @@ def simulator_setpoints(pos, vel, q, pos_sp, yaw_sp, prev_vel, vel_dot_lpf, vel_
     )
 
 
-def simulator_state_step(s, pos_sp, yaw_sp, prev_vel, vel_dot_lpf, vel_int, step_dt):
-    q_prev = normalize(s[0:4])
-    if np.linalg.norm(q_prev) < 1e-8:
-        q_prev = np.array([1.0, 0.0, 0.0, 0.0])
-
-    pos = s[[state_index["x"], state_index["y"], state_index["z"]]].copy()
-    vel_prev = s[[state_index["vx"], state_index["vy"], state_index["vz"]]].copy()
-    w_prev = s[[state_index["wx"], state_index["wy"], state_index["wz"]]].copy()
-
-    nominal = simulator_setpoints(pos, vel_prev, q_prev, pos_sp, yaw_sp, prev_vel, vel_dot_lpf, vel_int, step_dt)
-    acc_sp = nominal["acc_sp"]
-    omega_sp = nominal["rate_nominal"]
-
-    s_next = s.copy()
-    s_next[state_index["x"]] += MODEL_POS_ALPHA[0] * vel_prev[0] * step_dt
-    s_next[state_index["y"]] += MODEL_POS_ALPHA[1] * vel_prev[1] * step_dt
-    s_next[state_index["z"]] += MODEL_POS_ALPHA[2] * vel_prev[2] * step_dt
-
-    vel_next = MODEL_VEL_A * vel_prev + MODEL_VEL_B * acc_sp
-    s_next[state_index["vx"]] = vel_next[0]
-    s_next[state_index["vy"]] = vel_next[1]
-    s_next[state_index["vz"]] = vel_next[2]
-
-    q_dot = 0.5 * quat_mul(q_prev, np.array([0.0, w_prev[0], w_prev[1], w_prev[2]]))
-    s_next[0:4] = normalize(q_prev + MODEL_ATT_BETA * q_dot * step_dt)
-
-    w_next = MODEL_W_C * w_prev + MODEL_W_D * omega_sp
-    s_next[state_index["wx"]] = w_next[0]
-    s_next[state_index["wy"]] = w_next[1]
-    s_next[state_index["wz"]] = w_next[2]
-
-    return s_next, omega_sp, nominal["vel_dot_lpf"], nominal["vel_int_next"]
-
-
 def simulator_state_step_with_setpoint_rls(
     s,
     pos_sp,
@@ -576,76 +544,165 @@ def simulator_state_step_with_setpoint_rls(
     vel_int,
     step_dt,
     ctx=None,
+    rate_delay_buffer=None,
+    rate_delay_steps=0,
+    acc_delay_buffer=None,
+    acc_delay_steps=0,
 ):
-    q_prev = normalize(s[0:4])
-    if np.linalg.norm(q_prev) < 1e-8:
+    var = np.asarray(s, dtype=float).copy()
+    q_prev = normalize(var[0:4])
+    if np.linalg.norm(q_prev) < 1.0e-8:
         q_prev = np.array([1.0, 0.0, 0.0, 0.0])
+    var[0:4] = q_prev
 
-    pos = s[[state_index["x"], state_index["y"], state_index["z"]]].copy()
-    vel_prev = s[[state_index["vx"], state_index["vy"], state_index["vz"]]].copy()
-    w_prev = s[[state_index["wx"], state_index["wy"], state_index["wz"]]].copy()
+    x_ref, y_ref, z_ref = np.asarray(pos_sp, dtype=float)
+    yaw_ref = float(yaw_sp)
 
-    if ctx is None:
-        nominal = simulator_setpoints(pos, vel_prev, q_prev, pos_sp, yaw_sp, prev_vel, vel_dot_lpf, vel_int, step_dt)
-        omega_sp = nominal["rate_nominal"]
+    vel_prev = var[[state_index["vx"], state_index["vy"], state_index["vz"]]].copy()
+    vel_dot = (vel_prev - prev_vel) / step_dt
+    if MPC_VELD_LP > 1.0e-6:
+        vel_dot_alpha = step_dt / (step_dt + 1.0 / (2.0 * np.pi * MPC_VELD_LP))
     else:
-        rls_theta = {
-            "vel_sp": ctx["vel_sp_theta"],
-            "acc_sp": ctx["acc_sp_theta"],
-            "att_sp": ctx["att_sp_theta"],
-        }
-        rls_errors = {
-            "vel_sp": ctx["prev_vel_sp_error"],
-            "acc_sp": ctx["prev_acc_sp_error"],
-            "att_sp": ctx["prev_att_sp_error"],
-        }
-        nominal = corrected_px4_setpoints(
-            pos,
-            vel_prev,
-            q_prev,
-            pos_sp,
-            yaw_sp,
-            prev_vel,
-            vel_dot_lpf,
-            vel_int,
-            step_dt,
-            rls_theta,
-            rls_errors,
-            "online",
-            attitude_func=thrust_to_attitude_simulator,
-        )
-        omega_sp = apply_rate_rls(
-            nominal["rate_nominal"],
-            ctx["rate_theta"],
-            ctx["prev_rate_sp_error"],
-            "online",
-        )
-        ctx["prev_vel_sp_error"] = np.zeros(3)
-        ctx["prev_acc_sp_error"] = np.zeros(3)
-        ctx["prev_att_sp_error"] = np.zeros(4)
-        ctx["prev_rate_sp_error"] = np.zeros(3)
+        vel_dot_alpha = 1.0
+    vel_dot_lpf_next = vel_dot_lpf + vel_dot_alpha * (vel_dot - vel_dot_lpf)
 
-    acc_sp = nominal["acc_sp"]
+    if not np.all(np.isfinite([x_ref, y_ref, z_ref])):
+        acc_sp = np.array([0.0, 0.0, 100.0])
+        return var.copy(), np.zeros(3), acc_sp, vel_dot_lpf_next, np.zeros(3)
 
-    s_next = s.copy()
-    s_next[state_index["x"]] += MODEL_POS_ALPHA[0] * vel_prev[0] * step_dt
-    s_next[state_index["y"]] += MODEL_POS_ALPHA[1] * vel_prev[1] * step_dt
-    s_next[state_index["z"]] += MODEL_POS_ALPHA[2] * vel_prev[2] * step_dt
+    vel_sp = np.array([
+        MPC_XY_P * (x_ref - var[state_index["x"]]),
+        MPC_XY_P * (y_ref - var[state_index["y"]]),
+        MPC_Z_P * (z_ref - var[state_index["z"]]),
+    ])
 
-    vel_next = MODEL_VEL_A * vel_prev + MODEL_VEL_B * acc_sp
-    s_next[state_index["vx"]] = vel_next[0]
-    s_next[state_index["vy"]] = vel_next[1]
-    s_next[state_index["vz"]] = vel_next[2]
+    vel_xy_norm = np.sqrt(vel_sp[0] ** 2 + vel_sp[1] ** 2)
+    if vel_xy_norm > MPC_XY_VEL_MAX and vel_xy_norm > 1.0e-8:
+        vel_sp[:2] = vel_sp[:2] / vel_xy_norm * MPC_XY_VEL_MAX
+    vel_sp[2] = np.clip(vel_sp[2], -MPC_Z_VEL_MAX_UP, MPC_Z_VEL_MAX_DOWN)
 
-    q_dot = 0.5 * quat_mul(q_prev, np.array([0.0, w_prev[0], w_prev[1], w_prev[2]]))
-    s_next[0:4] = normalize(q_prev + MODEL_ATT_BETA * q_dot * step_dt)
+    vel_error = vel_sp - vel_prev
+    acc_sp = np.array([
+        MPC_XY_VEL_P_ACC * vel_error[0] + vel_int[0] - MPC_XY_VEL_D_ACC * vel_dot_lpf_next[0],
+        MPC_XY_VEL_P_ACC * vel_error[1] + vel_int[1] - MPC_XY_VEL_D_ACC * vel_dot_lpf_next[1],
+        MPC_Z_VEL_P_ACC * vel_error[2] + vel_int[2] - MPC_Z_VEL_D_ACC * vel_dot_lpf_next[2],
+    ])
 
-    w_next = MODEL_W_C * w_prev + MODEL_W_D * omega_sp
-    s_next[state_index["wx"]] = w_next[0]
-    s_next[state_index["wy"]] = w_next[1]
-    s_next[state_index["wz"]] = w_next[2]
+    body_z = np.array([-acc_sp[0], -acc_sp[1], A_OF_GRAVITY - acc_sp[2]])
+    body_z = normalize(body_z)
+    if np.linalg.norm(body_z) < 1.0e-8:
+        body_z = np.array([0.0, 0.0, 1.0])
+    tilt_angle = np.arccos(np.clip(body_z[2], -1.0, 1.0))
+    if tilt_angle > MPC_TILT_MAX:
+        rejection = np.array([body_z[0], body_z[1], 0.0])
+        rejection_norm = np.linalg.norm(rejection)
+        if rejection_norm < 1.0e-8:
+            rejection = np.array([1.0, 0.0, 0.0])
+            rejection_norm = 1.0
+        rejection = rejection / rejection_norm
+        body_z = np.array([
+            np.sin(MPC_TILT_MAX) * rejection[0],
+            np.sin(MPC_TILT_MAX) * rejection[1],
+            np.cos(MPC_TILT_MAX),
+        ])
 
-    return s_next, omega_sp, acc_sp, nominal["vel_dot_lpf"], nominal["vel_int_next"]
+    thrust_ned_z = acc_sp[2] * (MPC_THR_HOVER / A_OF_GRAVITY) - MPC_THR_HOVER
+    cos_ned_body = body_z[2] if abs(body_z[2]) >= 1.0e-6 else 1.0e-6
+    collective_thrust = min(thrust_ned_z / cos_ned_body, -MPC_THR_MIN)
+    thr_sp = body_z * collective_thrust
+
+    vel_error_for_int = vel_error.copy()
+    if (thr_sp[2] >= -MPC_THR_MIN and vel_error_for_int[2] >= 0.0) or \
+       (thr_sp[2] <= -MPC_THR_MAX and vel_error_for_int[2] <= 0.0):
+        vel_error_for_int[2] = 0.0
+
+    thrust_sp_xy_norm = np.sqrt(thr_sp[0] ** 2 + thr_sp[1] ** 2)
+    thrust_max_squared = MPC_THR_MAX * MPC_THR_MAX
+    allocated_horizontal_thrust = min(thrust_sp_xy_norm, MPC_THR_XY_MARGIN)
+    thrust_z_max_squared = thrust_max_squared - allocated_horizontal_thrust * allocated_horizontal_thrust
+    thr_sp[2] = max(thr_sp[2], -np.sqrt(max(0.0, thrust_z_max_squared)))
+
+    thrust_max_xy_squared = thrust_max_squared - thr_sp[2] * thr_sp[2]
+    thrust_max_xy = np.sqrt(max(0.0, thrust_max_xy_squared))
+    if thrust_sp_xy_norm > thrust_max_xy and thrust_sp_xy_norm > 1.0e-8:
+        thr_sp[:2] = thr_sp[:2] / thrust_sp_xy_norm * thrust_max_xy
+
+    acc_sp_xy_produced = thr_sp[:2] * (A_OF_GRAVITY / MPC_THR_HOVER)
+    if np.dot(acc_sp[:2], acc_sp[:2]) > np.dot(acc_sp_xy_produced, acc_sp_xy_produced):
+        arw_gain = 2.0 / MPC_XY_VEL_P_ACC
+        vel_error_for_int[:2] -= arw_gain * (acc_sp[:2] - acc_sp_xy_produced)
+    vel_error_for_int[~np.isfinite(vel_error_for_int)] = 0.0
+
+    att_body_z = normalize(-thr_sp)
+    if np.linalg.norm(att_body_z) < 1.0e-8:
+        att_body_z = np.array([0.0, 0.0, 1.0])
+    sy, cy = sin_cos_simulator(yaw_ref)
+    y_c = np.array([-sy, cy, 0.0])
+    body_x = np.cross(y_c, att_body_z)
+    if att_body_z[2] < 0.0:
+        body_x = -body_x
+    if abs(att_body_z[2]) < 1.0e-6:
+        body_x = np.array([0.0, 0.0, 1.0])
+    body_x = normalize(body_x)
+    body_y = np.cross(att_body_z, body_x)
+    att_sp = rotmat_to_quat(body_x, body_y, att_body_z)
+
+    qe0 = np.dot(var[0:4], att_sp)
+    sgn = 1.0 if qe0 >= 0.0 else -1.0
+    omega_sp = np.array([
+        2.0 * MC_ROLL_P * sgn * (var[0] * att_sp[1] - var[1] * att_sp[0] - var[2] * att_sp[3] + var[3] * att_sp[2]),
+        2.0 * MC_PITCH_P * sgn * (var[0] * att_sp[2] + var[1] * att_sp[3] - var[2] * att_sp[0] - var[3] * att_sp[1]),
+        2.0 * MC_YAW_P * sgn * (var[0] * att_sp[3] - var[1] * att_sp[2] + var[2] * att_sp[1] - var[3] * att_sp[0]),
+    ])
+
+    w_prev = var[[state_index["wx"], state_index["wy"], state_index["wz"]]].copy()
+    acc_for_dynamics = np.array([acc_sp_xy_produced[0], acc_sp_xy_produced[1], acc_sp[2]])
+    if acc_delay_buffer is not None and acc_delay_steps > 0:
+        while len(acc_delay_buffer) < acc_delay_steps:
+            acc_delay_buffer.append(acc_for_dynamics.copy())
+        acc_delay_buffer.append(acc_for_dynamics.copy())
+        acc_for_dynamics = acc_delay_buffer.pop(0)
+
+    omega_for_dynamics = omega_sp
+    if rate_delay_buffer is not None and rate_delay_steps > 0:
+        while len(rate_delay_buffer) < rate_delay_steps:
+            rate_delay_buffer.append(w_prev.copy())
+        rate_delay_buffer.append(omega_sp.copy())
+        omega_for_dynamics = rate_delay_buffer.pop(0)
+
+    s_next = var.copy()
+    s_next[state_index["x"]] += vel_prev[0] * step_dt
+    s_next[state_index["y"]] += vel_prev[1] * step_dt
+    s_next[state_index["z"]] += vel_prev[2] * step_dt
+    s_next[state_index["vx"]] = vel_prev[0] + acc_for_dynamics[0] * step_dt
+    s_next[state_index["vy"]] = vel_prev[1] + acc_for_dynamics[1] * step_dt
+    s_next[state_index["vz"]] = vel_prev[2] + acc_for_dynamics[2] * step_dt
+
+    q_dot = np.array([
+        -0.5 * (q_prev[1] * w_prev[0] + q_prev[2] * w_prev[1] + q_prev[3] * w_prev[2]),
+        0.5 * (q_prev[0] * w_prev[0] + q_prev[2] * w_prev[2] - q_prev[3] * w_prev[1]),
+        0.5 * (q_prev[0] * w_prev[1] - q_prev[1] * w_prev[2] + q_prev[3] * w_prev[0]),
+        0.5 * (q_prev[0] * w_prev[2] + q_prev[1] * w_prev[1] - q_prev[2] * w_prev[0]),
+    ])
+    s_next[0:4] = normalize(q_prev + q_dot * step_dt)
+    s_next[state_index["wx"]] = omega_for_dynamics[0]
+    s_next[state_index["wy"]] = omega_for_dynamics[1]
+    s_next[state_index["wz"]] = omega_for_dynamics[2]
+
+    vel_int_next = vel_int.copy()
+    vel_int_next[0] += vel_error_for_int[0] * MPC_XY_VEL_I_ACC * step_dt
+    vel_int_next[1] += vel_error_for_int[1] * MPC_XY_VEL_I_ACC * step_dt
+    vel_int_next[2] += vel_error_for_int[2] * MPC_Z_VEL_I_ACC * step_dt
+    vel_int_next[2] = np.clip(vel_int_next[2], -A_OF_GRAVITY, A_OF_GRAVITY)
+
+    return s_next, omega_sp, acc_sp, vel_dot_lpf_next, vel_int_next
+
+
+def simulator_state_step(s, pos_sp, yaw_sp, prev_vel, vel_dot_lpf, vel_int, step_dt, **kwargs):
+    s_next, omega_sp, _acc_sp, vel_dot_lpf_next, vel_int_next = simulator_state_step_with_setpoint_rls(
+        s, pos_sp, yaw_sp, prev_vel, vel_dot_lpf, vel_int, step_dt, None, **kwargs
+    )
+    return s_next, omega_sp, vel_dot_lpf_next, vel_int_next
 
 
 def get_position_setpoint_from_row(row, h=0):
@@ -727,16 +784,19 @@ def get_prediction_yaw_setpoint(row, h, route):
     return get_yaw_setpoint_from_row_horizon(row, h)
 
 
-def build_simulator_history(df):
+def build_simulator_history(df, rate_delay_steps=RATE_DELAY_STEPS, acc_delay_steps=ACC_DELAY_STEPS):
     n = len(df)
     vel_dot_lpf_hist = np.zeros((n, 3), dtype=float)
     vel_int_hist = np.zeros((n, 3), dtype=float)
     omega_sp_hist = np.zeros((n, 3), dtype=float)
+    acc_sp_hist = np.zeros((n, 3), dtype=float)
     internal_w_next_hist = np.zeros((n, 3), dtype=float)
 
     prev_vel = df.loc[0, ["cur_vx", "cur_vy", "cur_vz"]].to_numpy(float)
     vel_dot_lpf = np.zeros(3)
     vel_int = np.zeros(3)
+    rate_delay_buffer = []
+    acc_delay_buffer = []
 
     for i in range(n):
         row = df.iloc[i]
@@ -754,14 +814,26 @@ def build_simulator_history(df):
 
         vel_dot_lpf_hist[i] = vel_dot_lpf
         vel_int_hist[i] = vel_int
-        s_next, omega_sp, vel_dot_lpf, vel_int = simulator_state_step(
-            s, pos_sp, yaw_sp, prev_vel, vel_dot_lpf, vel_int, dt
+        s_next, omega_sp, acc_sp, vel_dot_lpf, vel_int = simulator_state_step_with_setpoint_rls(
+            s,
+            pos_sp,
+            yaw_sp,
+            prev_vel,
+            vel_dot_lpf,
+            vel_int,
+            dt,
+            None,
+            rate_delay_buffer=rate_delay_buffer,
+            rate_delay_steps=rate_delay_steps,
+            acc_delay_buffer=acc_delay_buffer,
+            acc_delay_steps=acc_delay_steps,
         )
         omega_sp_hist[i] = omega_sp
+        acc_sp_hist[i] = acc_sp
         internal_w_next_hist[i] = s_next[[state_index["wx"], state_index["wy"], state_index["wz"]]]
         prev_vel = s_next[[state_index["vx"], state_index["vy"], state_index["vz"]]].copy()
 
-    return vel_dot_lpf_hist, vel_int_hist, omega_sp_hist, internal_w_next_hist
+    return vel_dot_lpf_hist, vel_int_hist, omega_sp_hist, acc_sp_hist, internal_w_next_hist
 
 
 def make_setpoint_rls_models():
@@ -1172,11 +1244,13 @@ def main():
     parser.add_argument("state", nargs="?", default="x")
     parser.add_argument("csv_path", nargs="?", default=default_csv)
     parser.add_argument("--profile", choices=("px4", "simulation", "current", "legacy"), default="simulation")
-    parser.add_argument("--id-mode", choices=("online", "off"), default="online", help="setpoint RLS correction used by internal-model prediction")
+    parser.add_argument("--id-mode", choices=("online", "off"), default="off", help="legacy option retained for compatibility; prediction uses the dynamics_test model")
     parser.add_argument("--horizon", type=int, default=horizon)
     parser.add_argument("--dt", type=float, default=dt)
     parser.add_argument("--prediction-start", type=float, default=prediction_start_time)
     parser.add_argument("--prediction-interval", type=float, default=prediction_interval)
+    parser.add_argument("--rate-delay-steps", type=int, default=RATE_DELAY_STEPS)
+    parser.add_argument("--acc-delay-steps", type=int, default=ACC_DELAY_STEPS)
     args = parser.parse_args()
 
     state = rate_alias.get(args.state, args.state)
@@ -1251,31 +1325,17 @@ def main():
         print(f"[ERROR] missing column: {cur_col}")
         sys.exit(1)
 
-    (
-        rate_theta_hist,
-        vel_sp_theta_hist,
-        acc_sp_theta_hist,
-        att_sp_theta_hist,
-        _vel_state_theta_hist,
-        prev_vel_sp_error_hist,
-        prev_acc_sp_error_hist,
-        prev_att_sp_error_hist,
-        prev_rate_sp_error_hist,
-        _prev_vel_state_error_hist,
-        _nominal_rate_hist,
-        corrected_rate_hist,
-        corrected_acc_sp_hist,
-        vel_dot_lpf_hist,
-        vel_int_hist,
-    ) = build_rls_history(df, args.id_mode)
     square_target_index_hist, square_target_change_time_hist = build_square_target_history(df)
 
-    _, _, omega_sp_hist, internal_w_next_hist = build_simulator_history(df)
+    vel_dot_lpf_hist, vel_int_hist, omega_sp_hist, acc_sp_hist, internal_w_next_hist = build_simulator_history(
+        df,
+        rate_delay_steps=args.rate_delay_steps,
+        acc_delay_steps=args.acc_delay_steps,
+    )
 
     print(f"[INFO] csv={csv_path}")
     print(f"[INFO] state={state}, profile={args.profile}, id_mode={args.id_mode}, model_dt={dt:.6f}, csv_dt={csv_dt:.6f}, horizon={horizon}")
-    setpoint_model_info = "internal_px4_like_with_rls" if args.id_mode == "online" else "internal_px4_like_nominal_no_rls"
-    print(f"[INFO] model=mpc_simulator_identified_internal_model, setpoints={setpoint_model_info}")
+    print("[INFO] model=dynamics_test_px4_like_internal_model, setpoints=px4_like_dynamics_test_model")
     print(
         "[INFO] square_route "
         f"waypoints={SQUARE_WAYPOINTS[:, :2].tolist()}, "
@@ -1283,9 +1343,7 @@ def main():
     )
     print(
         "[INFO] internal_model "
-        f"vel_a={MODEL_VEL_A}, vel_b={MODEL_VEL_B}, "
-        f"w_c={MODEL_W_C}, w_d={MODEL_W_D}, "
-        f"pos_alpha={MODEL_POS_ALPHA}, att_beta={MODEL_ATT_BETA:.8g}"
+        f"rate_delay_steps={args.rate_delay_steps}, acc_delay_steps={args.acc_delay_steps}"
     )
     print(
         "[INFO] params "
@@ -1318,17 +1376,6 @@ def main():
         vel_dot_lpf = vel_dot_lpf_hist[row_idx].copy()
         vel_int = vel_int_hist[row_idx].copy()
         rls_ctx = None
-        if args.id_mode == "online":
-            rls_ctx = {
-                "rate_theta": rate_theta_hist[row_idx].copy(),
-                "vel_sp_theta": vel_sp_theta_hist[row_idx].copy(),
-                "acc_sp_theta": acc_sp_theta_hist[row_idx].copy(),
-                "att_sp_theta": att_sp_theta_hist[row_idx].copy(),
-                "prev_vel_sp_error": prev_vel_sp_error_hist[row_idx].copy(),
-                "prev_acc_sp_error": prev_acc_sp_error_hist[row_idx].copy(),
-                "prev_att_sp_error": prev_att_sp_error_hist[row_idx].copy(),
-                "prev_rate_sp_error": prev_rate_sp_error_hist[row_idx].copy(),
-            }
         route = {
             "index": int(square_target_index_hist[row_idx]),
             "row_index": int(square_target_index_hist[row_idx]),
@@ -1342,6 +1389,8 @@ def main():
         # pred[0] is the logged current state.  Then input u_h generates
         # pred[h+1], matching the controller/simulator horizon indexing.
         pred[0] = s.copy()
+        rate_delay_buffer = []
+        acc_delay_buffer = []
 
         for h in range(horizon):
             current_time = float(row["t"]) + h * dt
@@ -1357,6 +1406,10 @@ def main():
                 vel_int,
                 dt,
                 rls_ctx,
+                rate_delay_buffer=rate_delay_buffer,
+                rate_delay_steps=args.rate_delay_steps,
+                acc_delay_buffer=acc_delay_buffer,
+                acc_delay_steps=args.acc_delay_steps,
             )
             pred_omega_sp[h] = omega_sp.copy()
             pred_acc_sp[h] = acc_sp.copy()
@@ -1402,11 +1455,11 @@ def main():
         component_colors = ["tab:blue", "tab:orange", "tab:green"]
         if is_acc_setpoint_plot:
             px4_cols = acc_cols
-            calc_hist = corrected_acc_sp_hist
+            calc_hist = acc_sp_hist
             component_names = ["acc_x", "acc_y", "acc_z"]
         else:
             px4_cols = rate_cols
-            calc_hist = corrected_rate_hist
+            calc_hist = omega_sp_hist
             component_names = ["roll_rate", "pitch_rate", "yaw_rate"]
 
         for axis, (name, px4_col, color) in enumerate(zip(component_names, px4_cols, component_colors)):
@@ -1448,7 +1501,7 @@ def main():
         )
         ax.plot(
             df["t"],
-            corrected_acc_sp_hist[:, acc_axis],
+            acc_sp_hist[:, acc_axis],
             color="darkorange",
             linewidth=2.2,
             linestyle="--",
