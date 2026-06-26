@@ -7,16 +7,15 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
 
-DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_step_real3.csv"
+DEFAULT_CSV = "/home/kt182/ws_mcmpc/src/quadcopter_mcmpc_expt/visualize_mcmpc/csv/offboard_control_log_sin_real3.csv"
 # DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_sin_real3.csv"
 # DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_step7.csv"
 # DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_sin2.csv"
 
 DT = 0.02
-
 SIMULATION = False
-
 A_OF_GRAVITY = 9.80665
 COM_SPOOLUP_TIME = 1.0
 ANGULAR_ACCEL_LP = 30.0
@@ -24,6 +23,8 @@ CA_MINIMUM_YAW_MARGIN = 0.15
 RATE_DELAY_STEPS = 3
 ACC_DELAY_STEPS = 3
 RATE_INT_SYNC_PERIOD = 1.5
+PREDICTION_HORIZON = 75
+PREDICTION_INTERVAL = 1.5
 USE_RATE_INT_BIAS_TORQUE = True
 
 if SIMULATION:
@@ -1172,6 +1173,179 @@ def build_history(
     return actual, actual_next, pred_next, calc
 
 
+def finite_vector(value, fallback):
+    value = np.asarray(value, dtype=float)
+    if value.shape == np.asarray(fallback).shape and np.all(np.isfinite(value)):
+        return value.copy()
+    return np.asarray(fallback, dtype=float).copy()
+
+
+def finite_scalar(value, fallback):
+    value = float(value)
+    if np.isfinite(value):
+        return value
+    return fallback
+
+
+def selected_prediction_start_indices(t, active_mask, prediction_interval):
+    active_indices = np.flatnonzero(active_mask)
+    if len(active_indices) == 0:
+        return active_indices
+    if prediction_interval <= 0.0:
+        return active_indices
+
+    starts = [int(active_indices[0])]
+    next_start_time = float(t[active_indices[0]]) + prediction_interval
+    for idx in active_indices[1:]:
+        if float(t[idx]) + 1.0e-9 >= next_start_time:
+            starts.append(int(idx))
+            next_start_time = float(t[idx]) + prediction_interval
+    return np.asarray(starts, dtype=int)
+
+
+def build_multistep_predictions(
+    df,
+    actual,
+    context_hist,
+    start_indices,
+    step_dt,
+    horizon,
+    rate_delay_steps=RATE_DELAY_STEPS,
+    acc_delay_steps=ACC_DELAY_STEPS,
+):
+    n_starts = len(start_indices)
+    pred = np.full((n_starts, horizon + 1, len(STATE_NAMES)), np.nan, dtype=float)
+
+    for out_i, start in enumerate(start_indices):
+        s = actual[start].copy()
+        if not np.all(np.isfinite(s)):
+            continue
+        pred[out_i, 0] = s.copy()
+
+        prev_vel = finite_vector(context_hist["prev_vel"][start], s[[STATE_INDEX["vx"], STATE_INDEX["vy"], STATE_INDEX["vz"]]])
+        prev_acc = finite_vector(context_hist["prev_acc"][start], np.zeros(3))
+        vel_int = finite_vector(context_hist["vel_int"][start], np.zeros(3))
+        prev_omega = finite_vector(context_hist["prev_omega"][start], s[[STATE_INDEX["wx"], STATE_INDEX["wy"], STATE_INDEX["wz"]]])
+        prev_omega_dot = finite_vector(context_hist["prev_omega_dot"][start], np.zeros(3))
+        rate_int = finite_vector(context_hist["rate_int"][start], np.zeros(3))
+        motor_speed = finite_vector(context_hist["motor_speed"][start], np.zeros(4))
+        yaw_torque_lpf_state = context_hist["yaw_torque_lpf_state"][start]
+        if not np.isfinite(yaw_torque_lpf_state):
+            yaw_torque_lpf_state = None
+        allocator_saturation_positive = context_hist["allocator_saturation_positive"][start].copy()
+        allocator_saturation_negative = context_hist["allocator_saturation_negative"][start].copy()
+        rate_delay_buffer = [entry.copy() for entry in context_hist["rate_delay_buffer"][start]]
+        acc_delay_buffer = [entry.copy() for entry in context_hist["acc_delay_buffer"][start]]
+
+        for h in range(horizon):
+            row_idx = start + h
+            if row_idx >= len(df):
+                break
+
+            row = df.iloc[row_idx]
+            pos_sp, yaw_sp = input_from_row(row)
+            s_current = s.copy()
+            s, prev_acc, vel_int, debug = cu_mpc_simulator_step(
+                s,
+                pos_sp,
+                yaw_sp,
+                prev_vel,
+                prev_acc,
+                vel_int,
+                step_dt,
+                prev_omega=prev_omega,
+                rate_int=rate_int,
+                z_vel_max_up=finite_scalar(context_hist["z_vel_max_up"][row_idx], MPC_Z_VEL_MAX_UP),
+                thrust_min=finite_scalar(context_hist["thrust_min"][row_idx], MPC_THR_MIN),
+                no_thrust=bool(context_hist["no_thrust"][row_idx]),
+                hover_thrust=finite_scalar(context_hist["hover_thrust"][row_idx], MPC_THR_HOVER),
+                tilt_limit=finite_scalar(context_hist["tilt_limit"][row_idx], MPC_TILT_MAX),
+                rate_delay_buffer=rate_delay_buffer,
+                rate_delay_steps=rate_delay_steps,
+                acc_delay_buffer=acc_delay_buffer,
+                acc_delay_steps=acc_delay_steps,
+                landed_or_maybe_landed=bool(context_hist["landed_or_maybe_landed"][row_idx]),
+                saturation_positive=allocator_saturation_positive,
+                saturation_negative=allocator_saturation_negative,
+                yaw_torque_lpf_state=yaw_torque_lpf_state,
+                prev_motor_speed=motor_speed,
+                prev_omega_dot=prev_omega_dot,
+            )
+            pred[out_i, h + 1] = s.copy()
+
+            rate_int = debug.get("rate_int_next", rate_int)
+            prev_omega_dot = debug.get("rate_derivative_next", prev_omega_dot)
+            motor_speed = debug.get("motor_speed", motor_speed)
+            yaw_torque_lpf_state = debug.get("yaw_torque_lpf_next", yaw_torque_lpf_state)
+            allocator_saturation_positive = debug.get("allocator_saturation_positive", allocator_saturation_positive)
+            allocator_saturation_negative = debug.get("allocator_saturation_negative", allocator_saturation_negative)
+            prev_vel = s_current[[STATE_INDEX["vx"], STATE_INDEX["vy"], STATE_INDEX["vz"]]].copy()
+            prev_omega = s_current[[STATE_INDEX["wx"], STATE_INDEX["wy"], STATE_INDEX["wz"]]].copy()
+
+    return pred
+
+
+def add_segments(ax, segments, color, label, linewidth=1.5, alpha=0.8):
+    if not segments:
+        return
+    collection = LineCollection(segments, colors=color, linewidths=linewidth, alpha=alpha)
+    ax.add_collection(collection)
+    ax.plot([], [], color=color, linewidth=linewidth, alpha=alpha, label=label)
+
+
+def state_prediction_segments(plot_t, start_indices, pred_rollouts, actual, value_func, step_dt):
+    pred_segments = []
+    error_segments = []
+    for start, pred in zip(start_indices, pred_rollouts):
+        pred_value = value_func(pred)
+        pred_mask = np.isfinite(pred_value)
+        if np.any(pred_mask):
+            length = int(np.flatnonzero(pred_mask)[-1]) + 1
+            xs = plot_t[start] + np.arange(length) * step_dt
+            pred_segments.append(np.column_stack([xs, pred_value[:length]]))
+
+        actual_len = min(len(pred), len(actual) - start)
+        if actual_len <= 0:
+            continue
+        actual_value = value_func(actual[start:start + actual_len])
+        error_value = pred_value[:actual_len] - actual_value
+        error_mask = np.isfinite(error_value)
+        if np.any(error_mask):
+            length = int(np.flatnonzero(error_mask)[-1]) + 1
+            xs = plot_t[start] + np.arange(length) * step_dt
+            error_segments.append(np.column_stack([xs, error_value[:length]]))
+    return pred_segments, error_segments
+
+
+def state_delta_segments(plot_t, start_indices, pred_rollouts, actual, value_func, step_dt):
+    pred_segments = []
+    actual_segments = []
+    for start, pred in zip(start_indices, pred_rollouts):
+        pred_value = value_func(pred)
+        if len(pred_value) == 0 or not np.isfinite(pred_value[0]):
+            continue
+        pred_delta = pred_value - pred_value[0]
+        pred_mask = np.isfinite(pred_delta)
+        if np.any(pred_mask):
+            length = int(np.flatnonzero(pred_mask)[-1]) + 1
+            xs = plot_t[start] + np.arange(length) * step_dt
+            pred_segments.append(np.column_stack([xs, pred_delta[:length]]))
+
+        actual_len = min(len(pred), len(actual) - start)
+        if actual_len <= 0:
+            continue
+        actual_value = value_func(actual[start:start + actual_len])
+        if not np.isfinite(actual_value[0]):
+            continue
+        actual_delta = actual_value - actual_value[0]
+        actual_mask = np.isfinite(actual_delta)
+        if np.any(actual_mask):
+            length = int(np.flatnonzero(actual_mask)[-1]) + 1
+            xs = plot_t[start] + np.arange(length) * step_dt
+            actual_segments.append(np.column_stack([xs, actual_delta[:length]]))
+    return pred_segments, actual_segments
+
+
 def finite_plot_mask(t, *values):
     mask = np.isfinite(t)
     for value in values:
@@ -1317,14 +1491,19 @@ def attach_interactive_navigation(fig, ax, base_scale=1.2):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Compare offboard log setpoints and one-step dynamics against mpc_simulator.cu-style prediction.")
+    parser = argparse.ArgumentParser(description="Compare offboard log setpoints and recursive dynamics predictions against mpc_simulator.cu-style prediction.")
     parser.add_argument("state", nargs="?", default="wx")
     parser.add_argument("csv_path", nargs="?", default=DEFAULT_CSV)
     parser.add_argument("--dt", type=float, default=DT)
     parser.add_argument("--rate-delay-steps", type=int, default=RATE_DELAY_STEPS)
     parser.add_argument("--acc-delay-steps", type=int, default=ACC_DELAY_STEPS)
     parser.add_argument("--rate-int-sync-period", type=float, default=RATE_INT_SYNC_PERIOD)
+    parser.add_argument("--horizon", type=int, default=PREDICTION_HORIZON, help="recursive prediction horizon in steps (1..75)")
+    parser.add_argument("--prediction-interval", type=float, default=PREDICTION_INTERVAL, help="time spacing between recursive prediction starts [s]")
     args = parser.parse_args()
+    prediction_horizon = int(np.clip(args.horizon, 1, PREDICTION_HORIZON))
+    if prediction_horizon != args.horizon:
+        print(f"[INFO] clipped horizon from {args.horizon} to {prediction_horizon}")
 
     df = pd.read_csv(args.csv_path)
     df = preprocess_log(df, args.dt)
@@ -1333,18 +1512,42 @@ def main():
     finite_dt = t_diff[np.isfinite(t_diff) & (t_diff > 0.0)]
     csv_dt = float(np.median(finite_dt)) if len(finite_dt) > 0 else args.dt
 
-    actual, actual_next, pred_next, calc = build_history(
+    history = build_history(
         df,
         args.dt,
         rate_delay_steps=args.rate_delay_steps,
         acc_delay_steps=args.acc_delay_steps,
         rate_int_sync_period=args.rate_int_sync_period,
+        return_context=prediction_horizon > 1,
     )
+    if prediction_horizon > 1:
+        actual, actual_next, pred_next, calc, context_hist = history
+    else:
+        actual, actual_next, pred_next, calc = history
+        context_hist = None
     active_plot_mask = non_idle_plot_mask(df)
     if np.any(active_plot_mask):
         plot_t = t - t[np.flatnonzero(active_plot_mask)[0]]
     else:
         plot_t = t.copy()
+    prediction_start_indices = np.array([], dtype=int)
+    pred_rollouts = None
+    if prediction_horizon > 1:
+        prediction_start_indices = selected_prediction_start_indices(
+            t,
+            active_plot_mask,
+            args.prediction_interval,
+        )
+        pred_rollouts = build_multistep_predictions(
+            df,
+            actual,
+            context_hist,
+            prediction_start_indices,
+            args.dt,
+            prediction_horizon,
+            rate_delay_steps=args.rate_delay_steps,
+            acc_delay_steps=args.acc_delay_steps,
+        )
 
     state_aliases = {
         "e0": "q0", "e1": "q1", "e2": "q2", "e3": "q3",
@@ -1546,33 +1749,61 @@ def main():
     elif state in dynamics_sources:
         idx = dynamics_sources[state]
         if delta_mode:
-            model_delta = pred_next[:, idx] - actual[:, idx]
-            log_delta = actual_next[:, idx] - actual[:, idx]
-            mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
             plot_title = f"d{state_name}"
-            ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
-            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linewidth=2.0, label=f"d{state_name}_actual")
+            if prediction_horizon > 1 and pred_rollouts is not None:
+                value_func = lambda values, idx=idx: values[:, idx]
+                pred_segments, actual_segments = state_delta_segments(
+                    plot_t,
+                    prediction_start_indices,
+                    pred_rollouts,
+                    actual,
+                    value_func,
+                    args.dt,
+                )
+                add_segments(ax, pred_segments, "tab:cyan", f"d{state_name}_model_{prediction_horizon}step")
+                add_segments(ax, actual_segments, "tab:orange", f"d{state_name}_actual_{prediction_horizon}step")
+            else:
+                model_delta = pred_next[:, idx] - actual[:, idx]
+                log_delta = actual_next[:, idx] - actual[:, idx]
+                mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
+                ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
+                ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linewidth=2.0, label=f"d{state_name}_actual")
             ax.set_ylabel("")
         else:
             actual_value = actual[:, idx]
-            model_value = pred_next[:, idx]
             actual_mask = finite_plot_mask(t, actual_value) & active_plot_mask
-            model_mask = finite_plot_mask(t, model_value) & active_plot_mask
             plot_title = state_name
             ax.plot(plot_t[actual_mask], actual_value[actual_mask], color="tab:orange", linewidth=2.0, label=f"{state_name}_actual")
-            ax.plot(plot_t[model_mask] + args.dt, model_value[model_mask], color="tab:cyan", linewidth=2.0, label=f"{state_name}_model")
+            if prediction_horizon > 1 and pred_rollouts is not None:
+                value_func = lambda values, idx=idx: values[:, idx]
+                pred_segments, error_segments = state_prediction_segments(
+                    plot_t,
+                    prediction_start_indices,
+                    pred_rollouts,
+                    actual,
+                    value_func,
+                    args.dt,
+                )
+                add_segments(ax, pred_segments, "tab:cyan", f"{state_name}_model_{prediction_horizon}step")
+            else:
+                model_value = pred_next[:, idx]
+                model_mask = finite_plot_mask(t, model_value) & active_plot_mask
+                ax.plot(plot_t[model_mask] + args.dt, model_value[model_mask], color="tab:cyan", linewidth=2.0, label=f"{state_name}_model")
             ax.set_title(state_name)
             ax.set_ylabel("state")
             ax = axes[1]
-            state_error = pred_next[:, idx] - actual_next[:, idx]
-            error_mask = finite_plot_mask(t, state_error) & active_plot_mask
-            ax.plot(
-                plot_t[error_mask] + args.dt,
-                state_error[error_mask],
-                color="tab:red",
-                linewidth=2.0,
-                label=f"{state_name}_model_actual_error",
-            )
+            if prediction_horizon > 1 and pred_rollouts is not None:
+                add_segments(ax, error_segments, "tab:red", f"{state_name}_model_actual_error")
+            else:
+                state_error = pred_next[:, idx] - actual_next[:, idx]
+                error_mask = finite_plot_mask(t, state_error) & active_plot_mask
+                ax.plot(
+                    plot_t[error_mask] + args.dt,
+                    state_error[error_mask],
+                    color="tab:red",
+                    linewidth=2.0,
+                    label=f"{state_name}_model_actual_error",
+                )
             ax.axhline(0.0, color="0.35", linewidth=1.0)
             ax.set_title(f"{state_name} error")
             ax.set_ylabel("model - actual")
@@ -1582,33 +1813,61 @@ def main():
         actual_euler = np.array([quat_to_euler(q) for q in actual[:, 0:4]])
         actual_next_euler = np.array([quat_to_euler(q) if np.all(np.isfinite(q)) else [np.nan, np.nan, np.nan] for q in actual_next[:, 0:4]])
         if delta_mode:
-            model_delta = pred_euler[:, axis] - actual_euler[:, axis]
-            log_delta = actual_next_euler[:, axis] - actual_euler[:, axis]
-            mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
             plot_title = f"d{state_name}"
-            ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
-            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linewidth=2.0, label=f"d{state_name}_actual")
+            if prediction_horizon > 1 and pred_rollouts is not None:
+                value_func = lambda values, axis=axis: np.array([quat_to_euler(q)[axis] for q in values[:, 0:4]])
+                pred_segments, actual_segments = state_delta_segments(
+                    plot_t,
+                    prediction_start_indices,
+                    pred_rollouts,
+                    actual,
+                    value_func,
+                    args.dt,
+                )
+                add_segments(ax, pred_segments, "tab:cyan", f"d{state_name}_model_{prediction_horizon}step")
+                add_segments(ax, actual_segments, "tab:orange", f"d{state_name}_actual_{prediction_horizon}step")
+            else:
+                model_delta = pred_euler[:, axis] - actual_euler[:, axis]
+                log_delta = actual_next_euler[:, axis] - actual_euler[:, axis]
+                mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
+                ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
+                ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linewidth=2.0, label=f"d{state_name}_actual")
             ax.set_ylabel("")
         else:
             actual_value = actual_euler[:, axis]
-            model_value = pred_euler[:, axis]
             actual_mask = finite_plot_mask(t, actual_value) & active_plot_mask
-            model_mask = finite_plot_mask(t, model_value) & active_plot_mask
             plot_title = state_name
             ax.plot(plot_t[actual_mask], actual_value[actual_mask], color="tab:orange", linewidth=2.0, label=f"{state_name}_actual")
-            ax.plot(plot_t[model_mask] + args.dt, model_value[model_mask], color="tab:cyan", linewidth=2.0, label=f"{state_name}_model")
+            if prediction_horizon > 1 and pred_rollouts is not None:
+                value_func = lambda values, axis=axis: np.array([quat_to_euler(q)[axis] for q in values[:, 0:4]])
+                pred_segments, error_segments = state_prediction_segments(
+                    plot_t,
+                    prediction_start_indices,
+                    pred_rollouts,
+                    actual,
+                    value_func,
+                    args.dt,
+                )
+                add_segments(ax, pred_segments, "tab:cyan", f"{state_name}_model_{prediction_horizon}step")
+            else:
+                model_value = pred_euler[:, axis]
+                model_mask = finite_plot_mask(t, model_value) & active_plot_mask
+                ax.plot(plot_t[model_mask] + args.dt, model_value[model_mask], color="tab:cyan", linewidth=2.0, label=f"{state_name}_model")
             ax.set_title(state_name)
             ax.set_ylabel("state")
             ax = axes[1]
-            state_error = pred_euler[:, axis] - actual_next_euler[:, axis]
-            error_mask = finite_plot_mask(t, state_error) & active_plot_mask
-            ax.plot(
-                plot_t[error_mask] + args.dt,
-                state_error[error_mask],
-                color="tab:red",
-                linewidth=2.0,
-                label=f"{state_name}_model_actual_error",
-            )
+            if prediction_horizon > 1 and pred_rollouts is not None:
+                add_segments(ax, error_segments, "tab:red", f"{state_name}_model_actual_error")
+            else:
+                state_error = pred_euler[:, axis] - actual_next_euler[:, axis]
+                error_mask = finite_plot_mask(t, state_error) & active_plot_mask
+                ax.plot(
+                    plot_t[error_mask] + args.dt,
+                    state_error[error_mask],
+                    color="tab:red",
+                    linewidth=2.0,
+                    label=f"{state_name}_model_actual_error",
+                )
             ax.axhline(0.0, color="0.35", linewidth=1.0)
             ax.set_title(f"{state_name} error")
             ax.set_ylabel("model - actual")
@@ -1622,8 +1881,11 @@ def main():
     print(f"[INFO] csv={args.csv_path}")
     print(
         f"[INFO] state={state}, model_dt={args.dt:.6f}, csv_dt={csv_dt:.6f}, "
-        f"rate_delay_steps={args.rate_delay_steps}, acc_delay_steps={args.acc_delay_steps}"
+        f"rate_delay_steps={args.rate_delay_steps}, acc_delay_steps={args.acc_delay_steps}, "
+        f"horizon={prediction_horizon}, prediction_interval={args.prediction_interval:.3f}"
     )
+    if prediction_horizon > 1:
+        print(f"[INFO] recursive prediction starts: {len(prediction_start_indices)}")
     print(f"[INFO] plot samples: {int(np.count_nonzero(active_plot_mask))}/{len(active_plot_mask)} non-Idle")
     if not dual_state_plot and not group_plot:
         ax.set_title(plot_title)
