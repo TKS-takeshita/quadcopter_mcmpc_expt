@@ -8,48 +8,121 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-
-DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_step5.csv"
+DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_step_real3.csv"
+# DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_sin_real3.csv"
+# DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_step7.csv"
+# DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_sin2.csv"
 
 DT = 0.02
 
+SIMULATION = False
+
 A_OF_GRAVITY = 9.80665
-MPC_XY_P = 0.30
-MPC_Z_P = 1.00
-MPC_XY_VEL_P_ACC = 1.80
-MPC_XY_VEL_I_ACC = 0.40
-MPC_XY_VEL_D_ACC = 0.20
-MPC_Z_VEL_P_ACC = 4.00
-MPC_Z_VEL_I_ACC = 2.00
-MPC_Z_VEL_D_ACC = 0.00
-MPC_XY_VEL_MAX = 12.0
-MPC_Z_VEL_MAX_UP = 3.0
-MPC_Z_VEL_MAX_DOWN = 1.0
 COM_SPOOLUP_TIME = 1.0
-MPC_TKO_RAMP_T = 3.0
-MPC_THR_HOVER = 0.60
-MPC_THR_MIN = 0.1
-MPC_THR_MAX = 0.9
-MPC_THR_XY_MARGIN = 0.3
-MPC_TILT_MAX = 0.78539816339
-MC_ROLL_P = 4.00
-MC_PITCH_P = 4.00
-MC_YAW_P = 2.80
-MC_ROLLRATE_P = 1.0
-MC_PITCHRATE_P = 1.0
-MC_YAWRATE_P = 1.0
-MC_ROLLRATE_D = 0.0035
-MC_PITCHRATE_D = 0.0035
-MC_YAWRATE_D = 0.00
-MC_ROLLRATE_I = 0.2
-MC_PITCHRATE_I = 0.2
-MC_YAWRATE_I = 0.2
-MPC_VELD_LP = 5.0
+ANGULAR_ACCEL_LP = 30.0
+CA_MINIMUM_YAW_MARGIN = 0.15
 RATE_DELAY_STEPS = 3
 ACC_DELAY_STEPS = 3
+RATE_INT_SYNC_PERIOD = 1.5
+USE_RATE_INT_BIAS_TORQUE = True
 
-DRONE_MASS = 2.3
-DRONE_INERTIA = np.diag([0.0418, 0.04226, 0.05619])
+if SIMULATION:
+    MPC_XY_P = 0.30
+    MPC_Z_P = 1.00
+    MPC_XY_VEL_P_ACC = 1.80
+    MPC_XY_VEL_I_ACC = 0.40
+    MPC_XY_VEL_D_ACC = 0.20
+    MPC_Z_VEL_P_ACC = 4.00
+    MPC_Z_VEL_I_ACC = 2.00
+    MPC_Z_VEL_D_ACC = 0.00
+    MPC_XY_VEL_MAX = 12.0
+    MPC_Z_VEL_MAX_UP = 3.0
+    MPC_Z_VEL_MAX_DOWN = 1.0
+    MPC_TKO_RAMP_T = 3.0
+    MPC_THR_HOVER = 0.60
+    MPC_THR_MIN = 0.10
+    MPC_THR_MAX = 0.90
+    MPC_THR_XY_MARGIN = 0.30
+    MPC_TILT_MAX = np.deg2rad(45.0)
+    MPC_VELD_LP = 5.0
+
+    MC_ROLL_P = 3.30
+    MC_PITCH_P = 3.30
+    MC_YAW_P = 2.80
+    MC_YAW_WEIGHT = 0.50
+    MC_ROLLRATE_MAX = np.deg2rad(220.0)
+    MC_PITCHRATE_MAX = np.deg2rad(220.0)
+    MC_YAWRATE_MAX = np.deg2rad(200.0)
+    MC_ROLLRATE_P = 0.150
+    MC_PITCHRATE_P = 0.150
+    MC_YAWRATE_P = 0.500
+    MC_ROLLRATE_K = 1.0
+    MC_PITCHRATE_K = 1.0
+    MC_YAWRATE_K = 1.0
+    MC_ROLLRATE_D = 0.0035
+    MC_PITCHRATE_D = 0.0035
+    MC_YAWRATE_D = 0.00
+    MC_ROLLRATE_I = 0.20
+    MC_PITCHRATE_I = 0.20
+    MC_YAWRATE_I = 0.100
+    MC_ROLLRATE_FF = 0.0
+    MC_PITCHRATE_FF = 0.0
+    MC_YAWRATE_FF = 0.0
+    MC_RR_INT_LIM = 0.30
+    MC_PR_INT_LIM = 0.30
+    MC_YR_INT_LIM = 0.30
+    MC_YAW_TQ_CUTOFF = 2.0
+    DRONE_MASS = 2.3
+    DRONE_INERTIA = np.diag([0.0418, 0.04226, 0.05619])
+else:
+    MPC_XY_P = 0.95
+    MPC_Z_P = 1.00
+    MPC_XY_VEL_P_ACC = 2.00
+    MPC_XY_VEL_I_ACC = 0.40
+    MPC_XY_VEL_D_ACC = 0.20
+    MPC_Z_VEL_P_ACC = 4.00
+    MPC_Z_VEL_I_ACC = 2.00
+    MPC_Z_VEL_D_ACC = 0.00
+    MPC_XY_VEL_MAX = 43.2 / 3.6
+    MPC_Z_VEL_MAX_UP = 10.8 / 3.6
+    MPC_Z_VEL_MAX_DOWN = 5.4 / 3.6
+    MPC_TKO_RAMP_T = 3.0
+    MPC_THR_HOVER = 0.65
+    MPC_THR_MIN = 0.12
+    MPC_THR_MAX = 1.00
+    MPC_THR_XY_MARGIN = 0.30
+    MPC_TILT_MAX = np.deg2rad(45.0)
+    MPC_VELD_LP = 5.0
+
+    MC_ROLL_P = 4.00
+    MC_PITCH_P = 4.00
+    MC_YAW_P = 2.80
+    MC_YAW_WEIGHT = 0.40
+    MC_ROLLRATE_MAX = np.deg2rad(220.0)
+    MC_PITCHRATE_MAX = np.deg2rad(220.0)
+    MC_YAWRATE_MAX = np.deg2rad(200.0)
+    MC_ROLLRATE_P = 0.150
+    MC_PITCHRATE_P = 0.150
+    MC_YAWRATE_P = 0.200
+    MC_ROLLRATE_K = 1.0
+    MC_PITCHRATE_K = 1.0
+    MC_YAWRATE_K = 1.0
+    MC_ROLLRATE_D = 0.0030
+    MC_PITCHRATE_D = 0.0030
+    MC_YAWRATE_D = 0.00
+    MC_ROLLRATE_I = 0.20
+    MC_PITCHRATE_I = 0.20
+    MC_YAWRATE_I = 0.100
+    MC_ROLLRATE_FF = 0.0
+    MC_PITCHRATE_FF = 0.0
+    MC_YAWRATE_FF = 0.0
+    MC_RR_INT_LIM = 0.30
+    MC_PR_INT_LIM = 0.30
+    MC_YR_INT_LIM = 0.30
+    MC_YAW_TQ_CUTOFF = 2.0
+    DRONE_MASS = 1.5
+    DRONE_INERTIA = np.diag([0.0418, 0.04226, 0.05619])
+
 ROTOR_POSITIONS = np.array([
     [0.180655, 0.180655, 0.0],   # rotor_1 front right, ccw
     [-0.180655, -0.180655, 0.0], # rotor_2 back left, ccw
@@ -57,10 +130,30 @@ ROTOR_POSITIONS = np.array([
     [-0.180655, 0.180655, 0.0],  # rotor_4 back right, cw
 ], dtype=float)
 ROTOR_YAW_SIGNS = np.array([1.0, 1.0, -1.0, -1.0], dtype=float)
-MOTOR_CONSTANT = 1.09e-5
+PX4_QUAD_X_MIX = np.array([
+    [-0.70710678, 0.70710678, 1.0, -1.0],
+    [0.70710678, -0.70710678, 1.0, -1.0],
+    [0.70710678, 0.70710678, -1.0, -1.0],
+    [-0.70710678, -0.70710678, -1.0, -1.0],
+], dtype=float)
+PX4_QUAD_X_MIX_INV = np.linalg.inv(PX4_QUAD_X_MIX)
+PX4_ACTUATOR_MIN = np.zeros(4, dtype=float)
+PX4_ACTUATOR_MAX = np.ones(4, dtype=float)
+MOTOR_CONSTANT_SDF = 1.09e-5
+MOTOR_THRUST_SCALE = 0.9429863114169338
+MOTOR_CONSTANT = MOTOR_CONSTANT_SDF * MOTOR_THRUST_SCALE
 MOMENT_CONSTANT = 1.5e-7
+MOTOR_SPEED_MODEL = "bench_table"
 MOTOR_INPUT_SCALING = 1000.0
 MAX_ROT_VELOCITY = 1120.0
+MOTOR_TIME_CONSTANT_UP = 0.0125
+MOTOR_TIME_CONSTANT_DOWN = 0.025
+ROTOR_VELOCITY_SLOWDOWN_SIM = 10.0
+BENCH_THROTTLE = np.array([30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100], dtype=float) / 100.0
+BENCH_RPM = np.array([4042, 4469, 4855, 5301, 5780, 6298, 6800, 7281, 7679, 8096, 8468, 8867, 9257, 9675, 9857], dtype=float)
+BENCH_MIN_THROTTLE = BENCH_THROTTLE[0]
+BENCH_MIN_RPM = BENCH_RPM[0]
+BENCH_MAX_RPM = BENCH_RPM[-1]
 
 TAKEOFF_STATE_DISARMED = 1
 TAKEOFF_STATE_SPOOLUP = 2
@@ -86,6 +179,10 @@ def preprocess_log(df, step_dt):
     reset_indices = np.flatnonzero(np.diff(t) <= 0.0) + 1
     starts = np.r_[0, reset_indices]
     ends = np.r_[reset_indices, len(df)]
+    segment_id = np.zeros(len(df), dtype=np.int64)
+    for segment_idx, (start, end) in enumerate(zip(starts, ends)):
+        segment_id[start:end] = segment_idx
+    df["_segment_id"] = segment_id
 
     if len(starts) > 1:
         continuous_t = np.empty_like(t)
@@ -173,16 +270,123 @@ def mix_px4_quad_x(thrust_sp, torque_sp):
     ])
 
 
-def actuator_to_physical(actuator, q, omega_body):
-    actuator = np.clip(np.asarray(actuator, dtype=float)[:4], 0.0, 1.0)
-    motor_speed = np.clip(actuator * MOTOR_INPUT_SCALING, 0.0, MAX_ROT_VELOCITY)
+def allocate_px4_quad_x(control_sp):
+    roll_mix = PX4_QUAD_X_MIX[:, 0]
+    pitch_mix = PX4_QUAD_X_MIX[:, 1]
+    yaw_mix = PX4_QUAD_X_MIX[:, 2]
+    thrust_z_mix = PX4_QUAD_X_MIX[:, 3]
+
+    motor_raw = (
+        roll_mix * control_sp[0]
+        + pitch_mix * control_sp[1]
+        + thrust_z_mix * control_sp[3]
+    )
+    desaturation_steps = [
+        (thrust_z_mix, True, PX4_ACTUATOR_MAX),
+        (roll_mix, False, PX4_ACTUATOR_MAX),
+        (pitch_mix, False, PX4_ACTUATOR_MAX),
+    ]
+    for desaturation_vector, increase_only, actuator_max in desaturation_steps:
+        motor_raw = desaturate_motor_outputs(motor_raw, desaturation_vector, increase_only, actuator_max)
+
+    motor_raw += yaw_mix * control_sp[2]
+    yaw_actuator_max = PX4_ACTUATOR_MAX + (PX4_ACTUATOR_MAX - PX4_ACTUATOR_MIN) * CA_MINIMUM_YAW_MARGIN
+    desaturation_steps = [
+        (yaw_mix, False, yaw_actuator_max),
+        (thrust_z_mix, True, PX4_ACTUATOR_MAX),
+    ]
+    for desaturation_vector, increase_only, actuator_max in desaturation_steps:
+        motor_raw = desaturate_motor_outputs(motor_raw, desaturation_vector, increase_only, actuator_max)
+
+    motor_setpoint = np.clip(motor_raw, PX4_ACTUATOR_MIN, PX4_ACTUATOR_MAX)
+    allocated_control = PX4_QUAD_X_MIX_INV @ motor_setpoint
+    unallocated_control = control_sp - allocated_control
+    return motor_setpoint, unallocated_control
+
+
+def desaturate_motor_outputs(motor_raw, desaturation_vector, increase_only, actuator_max):
+    motor_raw = motor_raw.copy()
+    k_min = 0.0
+    k_max = 0.0
+    for value, desat, minimum, maximum in zip(motor_raw, desaturation_vector, PX4_ACTUATOR_MIN, actuator_max):
+        if abs(desat) < 0.2:
+            continue
+        if value < minimum:
+            k = (minimum - value) / desat
+            k_min = min(k_min, k)
+            k_max = max(k_max, k)
+        if value > maximum:
+            k = (maximum - value) / desat
+            k_min = min(k_min, k)
+            k_max = max(k_max, k)
+    gain = k_min + k_max
+    if increase_only and gain < 0.0:
+        return motor_raw
+
+    motor_raw += gain * desaturation_vector
+    k_min = 0.0
+    k_max = 0.0
+    for value, desat, minimum, maximum in zip(motor_raw, desaturation_vector, PX4_ACTUATOR_MIN, actuator_max):
+        if abs(desat) < 0.2:
+            continue
+        if value < minimum:
+            k = (minimum - value) / desat
+            k_min = min(k_min, k)
+            k_max = max(k_max, k)
+        if value > maximum:
+            k = (maximum - value) / desat
+            k_min = min(k_min, k)
+            k_max = max(k_max, k)
+    motor_raw += 0.5 * (k_min + k_max) * desaturation_vector
+    return motor_raw
+
+
+def motor_speed_from_setpoint(motor_setpoint, step_dt, prev_motor_speed=None):
+    actuator_for_speed = np.clip(motor_setpoint, 0.0, 1.0)
+    if MOTOR_SPEED_MODEL == "bench_table":
+        rpm_ref = np.interp(actuator_for_speed, BENCH_THROTTLE, BENCH_RPM)
+        below_table = actuator_for_speed < BENCH_MIN_THROTTLE
+        rpm_ref[below_table] = actuator_for_speed[below_table] / BENCH_MIN_THROTTLE * BENCH_MIN_RPM
+        rpm_ref = np.clip(rpm_ref, 0.0, BENCH_MAX_RPM)
+        motor_speed_ref = rpm_ref * (2.0 * np.pi / 60.0)
+    else:
+        motor_speed_ref = np.clip(actuator_for_speed * MOTOR_INPUT_SCALING, 0.0, MAX_ROT_VELOCITY)
+    if prev_motor_speed is None:
+        return motor_speed_ref
+
+    max_motor_speed = max(MAX_ROT_VELOCITY, BENCH_MAX_RPM * (2.0 * np.pi / 60.0))
+    motor_speed_prev = np.clip(np.asarray(prev_motor_speed, dtype=float)[:4], 0.0, max_motor_speed)
+    motor_tau = np.where(motor_speed_ref > motor_speed_prev, MOTOR_TIME_CONSTANT_UP, MOTOR_TIME_CONSTANT_DOWN)
+    motor_alpha = np.exp(-step_dt / np.maximum(motor_tau, 1.0e-9))
+    return motor_alpha * motor_speed_prev + (1.0 - motor_alpha) * motor_speed_ref
+
+
+def motor_speed_to_force_torque(motor_speed):
     rotor_forces = MOTOR_CONSTANT * motor_speed * motor_speed
     force_body = np.array([0.0, 0.0, -np.sum(rotor_forces)])
-
     torque_body = np.zeros(3)
     for motor_idx, (pos, force, yaw_sign) in enumerate(zip(ROTOR_POSITIONS, rotor_forces, ROTOR_YAW_SIGNS)):
         torque_body += np.cross(pos, np.array([0.0, 0.0, -force]))
         torque_body[2] += yaw_sign * MOMENT_CONSTANT * motor_speed[motor_idx] ** 2
+    return rotor_forces, force_body, torque_body
+
+
+def estimate_rate_int_bias_torque(rate_int, thrust_z_setpoint, step_dt):
+    baseline_control = np.array([0.0, 0.0, 0.0, thrust_z_setpoint], dtype=float)
+    trim_control = np.array([rate_int[0], rate_int[1], rate_int[2], thrust_z_setpoint], dtype=float)
+    baseline_motor, _ = allocate_px4_quad_x(baseline_control)
+    trim_motor, _ = allocate_px4_quad_x(trim_control)
+    baseline_speed = motor_speed_from_setpoint(baseline_motor, step_dt)
+    trim_speed = motor_speed_from_setpoint(trim_motor, step_dt)
+    _, _, baseline_torque = motor_speed_to_force_torque(baseline_speed)
+    _, _, trim_torque = motor_speed_to_force_torque(trim_speed)
+    return trim_torque - baseline_torque
+
+
+def actuator_to_physical(actuator, q, omega_body):
+    actuator = np.clip(np.asarray(actuator, dtype=float)[:4], 0.0, 1.0)
+    motor_speed = np.clip(actuator * MOTOR_INPUT_SCALING, 0.0, MAX_ROT_VELOCITY)
+    rotor_forces, force_body, torque_body = motor_speed_to_force_torque(motor_speed)
 
     rot = quat_to_rotmat(q)
     acc_ned = rot @ force_body / DRONE_MASS + np.array([0.0, 0.0, A_OF_GRAVITY])
@@ -263,6 +467,11 @@ def cu_mpc_simulator_step(
     hover_thrust=MPC_THR_HOVER, tilt_limit=MPC_TILT_MAX,
     rate_delay_buffer=None, rate_delay_steps=0,
     acc_delay_buffer=None, acc_delay_steps=0,
+    landed_or_maybe_landed=False,
+    saturation_positive=None, saturation_negative=None,
+    yaw_torque_lpf_state=None,
+    prev_motor_speed=None,
+    prev_omega_dot=None,
 ):
     # s:機体状態vec 
     var = np.asarray(s, dtype=float).copy()
@@ -273,6 +482,8 @@ def cu_mpc_simulator_step(
 
     x_ref, y_ref, z_ref = np.asarray(pos_sp, dtype=float)
     yaw_ref = float(yaw_sp)
+    if rate_int is None:
+        rate_int = np.zeros(3)
 
     # 現在速度
     vel_prev_state = var[[STATE_INDEX["vx"], STATE_INDEX["vy"], STATE_INDEX["vz"]]].copy()
@@ -291,7 +502,31 @@ def cu_mpc_simulator_step(
         thrust_setpoint = np.zeros(3)
         torque_setpoint = np.zeros(3)
         motor_setpoint = np.zeros(4)
-        physical = actuator_to_physical(motor_setpoint, q_prev, np.zeros(3))
+        actuator_for_speed = np.clip(motor_setpoint, 0.0, 1.0)
+        if MOTOR_SPEED_MODEL == "bench_table":
+            rpm_ref = np.interp(actuator_for_speed, BENCH_THROTTLE, BENCH_RPM)
+            below_table = actuator_for_speed < BENCH_MIN_THROTTLE
+            rpm_ref[below_table] = actuator_for_speed[below_table] / BENCH_MIN_THROTTLE * BENCH_MIN_RPM
+            rpm_ref = np.clip(rpm_ref, 0.0, BENCH_MAX_RPM)
+            motor_speed_ref = rpm_ref * (2.0 * np.pi / 60.0)
+        else:
+            motor_speed_ref = np.clip(actuator_for_speed * MOTOR_INPUT_SCALING, 0.0, MAX_ROT_VELOCITY)
+        if prev_motor_speed is None:
+            motor_speed = motor_speed_ref
+        else:
+            max_motor_speed = max(MAX_ROT_VELOCITY, BENCH_MAX_RPM * (2.0 * np.pi / 60.0))
+            motor_speed_prev = np.clip(np.asarray(prev_motor_speed, dtype=float)[:4], 0.0, max_motor_speed)
+            motor_tau = np.where(motor_speed_ref > motor_speed_prev, MOTOR_TIME_CONSTANT_UP, MOTOR_TIME_CONSTANT_DOWN)
+            motor_alpha = np.exp(-step_dt / np.maximum(motor_tau, 1.0e-9))
+            motor_speed = motor_alpha * motor_speed_prev + (1.0 - motor_alpha) * motor_speed_ref
+        rotor_forces = MOTOR_CONSTANT * motor_speed * motor_speed
+        force_body = np.array([0.0, 0.0, -np.sum(rotor_forces)])
+        torque_body = np.zeros(3)
+        for motor_idx, (pos, force, yaw_sign) in enumerate(zip(ROTOR_POSITIONS, rotor_forces, ROTOR_YAW_SIGNS)):
+            torque_body += np.cross(pos, np.array([0.0, 0.0, -force]))
+            torque_body[2] += yaw_sign * MOMENT_CONSTANT * motor_speed[motor_idx] ** 2
+        acc_ned = quat_to_rotmat(q_prev) @ force_body / DRONE_MASS + np.array([0.0, 0.0, A_OF_GRAVITY])
+        omega_dot_phys = np.linalg.solve(DRONE_INERTIA, torque_body)
         return var.copy(), vel_dot_lpf, np.zeros(3), {
             "vel_sp": np.full(3, np.nan),
             "acc_sp": acc_setpoint,
@@ -301,12 +536,27 @@ def cu_mpc_simulator_step(
             "acc_sp_used": np.zeros(3),
             "thr_sp": thrust_setpoint,
             "torque_sp": torque_setpoint,
+            "torque_sp_unfiltered": torque_setpoint,
+            "torque_p": np.zeros(3),
+            "torque_i": np.zeros(3),
+            "torque_d": np.zeros(3),
+            "torque_ff": np.zeros(3),
             "motor_sp": motor_setpoint,
             "motor_from_px4_torque": motor_setpoint,
-            "phys_acc": physical["acc_ned"],
-            "phys_wdot": physical["omega_dot"],
-            "phys_force": physical["force_body"],
-            "phys_torque": physical["torque_body"],
+            "phys_acc": acc_ned,
+            "phys_wdot": omega_dot_phys,
+            "rate_derivative": np.zeros(3),
+            "rate_derivative_next": np.zeros(3),
+            "rate_int": np.zeros(3),
+            "rate_int_next": np.zeros(3),
+            "phys_force": force_body,
+            "phys_torque": torque_body,
+            "phys_torque_raw": torque_body,
+            "bias_torque": np.zeros(3),
+            "motor_speed": motor_speed,
+            "allocator_unallocated_torque": np.zeros(3),
+            "allocator_saturation_positive": np.zeros(3, dtype=bool),
+            "allocator_saturation_negative": np.zeros(3, dtype=bool),
         }
     # 位置制御のP制御で速度目標値を計算
     vel_setpoint = np.array([
@@ -402,47 +652,196 @@ def cu_mpc_simulator_step(
     body_y = np.cross(att_body_z, body_x)
     att_setpoint = rotmat_to_quat(body_x, body_y, att_body_z)
 
-    # 目標姿勢と現在姿勢の内積から、目標角速度を計算
-    qe0 = np.dot(var[0:4], att_setpoint)
-    sgn = 1.0 if qe0 >= 0.0 else -1.0
-    omega_setpoint = np.array([
-        2.0 * MC_ROLL_P * sgn * (var[0] * att_setpoint[1] - var[1] * att_setpoint[0] - var[2] * att_setpoint[3] + var[3] * att_setpoint[2]),
-        2.0 * MC_PITCH_P * sgn * (var[0] * att_setpoint[2] + var[1] * att_setpoint[3] - var[2] * att_setpoint[0] - var[3] * att_setpoint[1]),
-        2.0 * MC_YAW_P * sgn * (var[0] * att_setpoint[3] - var[1] * att_setpoint[2] + var[2] * att_setpoint[1] - var[3] * att_setpoint[0]),
+    qd = att_setpoint.copy()
+    e_z = quat_to_rotmat(q_prev)[:, 2]
+    e_z_d = quat_to_rotmat(qd)[:, 2]
+    tilt_axis = np.cross(e_z, e_z_d)
+    tilt_axis_norm = np.linalg.norm(tilt_axis)
+    tilt_dot = np.clip(np.dot(e_z, e_z_d), -1.0, 1.0)
+    if tilt_axis_norm < 1.0e-8:
+        qd_red = np.array([1.0, 0.0, 0.0, 0.0]) if tilt_dot > 0.0 else qd.copy()
+    else:
+        tilt_axis /= tilt_axis_norm
+        tilt_angle = np.arctan2(tilt_axis_norm, tilt_dot)
+        qd_red = normalize(np.array([
+            np.cos(0.5 * tilt_angle),
+            tilt_axis[0] * np.sin(0.5 * tilt_angle),
+            tilt_axis[1] * np.sin(0.5 * tilt_angle),
+            tilt_axis[2] * np.sin(0.5 * tilt_angle),
+        ]))
+        if abs(qd_red[1]) > 1.0 - 1.0e-5 or abs(qd_red[2]) > 1.0 - 1.0e-5:
+            qd_red = qd.copy()
+        else:
+            a0, a1, a2, a3 = qd_red
+            b0, b1, b2, b3 = q_prev
+            qd_red = normalize(np.array([
+                a0 * b0 - a1 * b1 - a2 * b2 - a3 * b3,
+                a0 * b1 + a1 * b0 + a2 * b3 - a3 * b2,
+                a0 * b2 - a1 * b3 + a2 * b0 + a3 * b1,
+                a0 * b3 + a1 * b2 - a2 * b1 + a3 * b0,
+            ]))
+
+    a0, a1, a2, a3 = np.array([qd_red[0], -qd_red[1], -qd_red[2], -qd_red[3]])
+    b0, b1, b2, b3 = qd
+    qd_dyaw = normalize(np.array([
+        a0 * b0 - a1 * b1 - a2 * b2 - a3 * b3,
+        a0 * b1 + a1 * b0 + a2 * b3 - a3 * b2,
+        a0 * b2 - a1 * b3 + a2 * b0 + a3 * b1,
+        a0 * b3 + a1 * b2 - a2 * b1 + a3 * b0,
+    ]))
+    if qd_dyaw[0] < 0.0:
+        qd_dyaw = -qd_dyaw
+    qd_dyaw[0] = np.clip(qd_dyaw[0], -1.0, 1.0)
+    qd_dyaw[3] = np.clip(qd_dyaw[3], -1.0, 1.0)
+    q_yaw_weighted = np.array([
+        np.cos(MC_YAW_WEIGHT * np.arccos(qd_dyaw[0])),
+        0.0,
+        0.0,
+        np.sin(MC_YAW_WEIGHT * np.arcsin(qd_dyaw[3])),
     ])
+    a0, a1, a2, a3 = qd_red
+    b0, b1, b2, b3 = q_yaw_weighted
+    qd_weighted = normalize(np.array([
+        a0 * b0 - a1 * b1 - a2 * b2 - a3 * b3,
+        a0 * b1 + a1 * b0 + a2 * b3 - a3 * b2,
+        a0 * b2 - a1 * b3 + a2 * b0 + a3 * b1,
+        a0 * b3 + a1 * b2 - a2 * b1 + a3 * b0,
+    ]))
+    a0, a1, a2, a3 = np.array([q_prev[0], -q_prev[1], -q_prev[2], -q_prev[3]])
+    b0, b1, b2, b3 = qd_weighted
+    qe = normalize(np.array([
+        a0 * b0 - a1 * b1 - a2 * b2 - a3 * b3,
+        a0 * b1 + a1 * b0 + a2 * b3 - a3 * b2,
+        a0 * b2 - a1 * b3 + a2 * b0 + a3 * b1,
+        a0 * b3 + a1 * b2 - a2 * b1 + a3 * b0,
+    ]))
+    if qe[0] < 0.0:
+        qe = -qe
+    attitude_gain = np.array([
+        MC_ROLL_P,
+        MC_PITCH_P,
+        MC_YAW_P / MC_YAW_WEIGHT if MC_YAW_WEIGHT > 1.0e-4 else MC_YAW_P,
+    ])
+    omega_setpoint = 2.0 * qe[1:4] * attitude_gain
+    omega_setpoint = np.clip(
+        omega_setpoint,
+        -np.array([MC_ROLLRATE_MAX, MC_PITCHRATE_MAX, MC_YAWRATE_MAX]),
+        np.array([MC_ROLLRATE_MAX, MC_PITCHRATE_MAX, MC_YAWRATE_MAX]),
+    )
 
     v_prev = vel_prev_state.copy()
     w_prev = var[[STATE_INDEX["wx"], STATE_INDEX["wy"], STATE_INDEX["wz"]]].copy()
     if prev_omega is None:
         prev_omega = w_prev.copy()
-    if rate_int is None:
-        rate_int = np.zeros(3)
-    omega_dot = (w_prev - prev_omega) / step_dt
+    if prev_omega_dot is None:
+        prev_omega_dot = np.zeros(3)
+    raw_omega_dot = (w_prev - prev_omega) / step_dt
+    if ANGULAR_ACCEL_LP > 1.0e-6:
+        omega_dot_alpha = step_dt / (step_dt + 1.0 / (2.0 * np.pi * ANGULAR_ACCEL_LP))
+        omega_dot = prev_omega_dot + omega_dot_alpha * (raw_omega_dot - prev_omega_dot)
+    else:
+        omega_dot = raw_omega_dot
     rate_error = omega_setpoint - w_prev
-    torque_setpoint = np.array([
-        MC_ROLLRATE_P * rate_error[0] + rate_int[0] - MC_ROLLRATE_D * omega_dot[0],
-        MC_PITCHRATE_P * rate_error[1] + rate_int[1] - MC_PITCHRATE_D * omega_dot[1],
-        MC_YAWRATE_P * rate_error[2] + rate_int[2] - MC_YAWRATE_D * omega_dot[2],
+    rate_p = np.array([
+        MC_ROLLRATE_K * MC_ROLLRATE_P,
+        MC_PITCHRATE_K * MC_PITCHRATE_P,
+        MC_YAWRATE_K * MC_YAWRATE_P,
     ])
-    motor_setpoint = mix_px4_quad_x(thrust_setpoint, torque_setpoint)
-    physical = actuator_to_physical(motor_setpoint, q_prev, w_prev)
-    acc_for_dynamics = np.array([
-        acc_sp_xy_produced[0],
-        acc_sp_xy_produced[1],
-        acc_setpoint[2],
+    rate_i = np.array([
+        MC_ROLLRATE_K * MC_ROLLRATE_I,
+        MC_PITCHRATE_K * MC_PITCHRATE_I,
+        MC_YAWRATE_K * MC_YAWRATE_I,
     ])
+    rate_d = np.array([
+        MC_ROLLRATE_K * MC_ROLLRATE_D,
+        MC_PITCHRATE_K * MC_PITCHRATE_D,
+        MC_YAWRATE_K * MC_YAWRATE_D,
+    ])
+    rate_ff = np.array([
+        MC_ROLLRATE_FF,
+        MC_PITCHRATE_FF,
+        MC_YAWRATE_FF,
+    ])
+    rate_int_lim = np.array([MC_RR_INT_LIM, MC_PR_INT_LIM, MC_YR_INT_LIM])
+    saturation_positive = (
+        np.zeros(3, dtype=bool)
+        if saturation_positive is None
+        else np.asarray(saturation_positive, dtype=bool)
+    )
+    saturation_negative = (
+        np.zeros(3, dtype=bool)
+        if saturation_negative is None
+        else np.asarray(saturation_negative, dtype=bool)
+    )
+
+    torque_p = rate_p * rate_error
+    torque_i = rate_int.copy()
+    torque_d = -rate_d * omega_dot
+    torque_ff = rate_ff * omega_setpoint
+    torque_setpoint_unfiltered = torque_p + torque_i + torque_d + torque_ff
+    torque_setpoint = torque_setpoint_unfiltered.copy()
+    if MC_YAW_TQ_CUTOFF > 1.0e-6:
+        yaw_alpha = step_dt / (step_dt + 1.0 / (2.0 * np.pi * MC_YAW_TQ_CUTOFF))
+        yaw_torque_prev = torque_setpoint[2] if yaw_torque_lpf_state is None else float(yaw_torque_lpf_state)
+        torque_setpoint[2] = yaw_torque_prev + yaw_alpha * (torque_setpoint[2] - yaw_torque_prev)
+        yaw_torque_lpf_next = torque_setpoint[2]
+    else:
+        yaw_torque_lpf_next = torque_setpoint[2]
+
+    rate_int_next = rate_int.copy()
+    if not landed_or_maybe_landed:
+        for axis in range(3):
+            rate_error_for_int = rate_error[axis]
+            if saturation_positive[axis]:
+                rate_error_for_int = min(rate_error_for_int, 0.0)
+            if saturation_negative[axis]:
+                rate_error_for_int = max(rate_error_for_int, 0.0)
+
+            i_factor = rate_error_for_int / np.deg2rad(400.0)
+            i_factor = max(0.0, 1.0 - i_factor * i_factor)
+            rate_int_next[axis] += i_factor * rate_i[axis] * rate_error_for_int * step_dt
+            if np.isfinite(rate_int_next[axis]):
+                rate_int_next[axis] = np.clip(rate_int_next[axis], -rate_int_lim[axis], rate_int_lim[axis])
+            else:
+                rate_int_next[axis] = rate_int[axis]
+
+    control_sp = np.array([
+        torque_setpoint[0],
+        torque_setpoint[1],
+        torque_setpoint[2],
+        thrust_setpoint[2],
+    ], dtype=float)
+    motor_setpoint, unallocated_control = allocate_px4_quad_x(control_sp)
+    allocator_saturation_positive_next = unallocated_control[:3] > np.finfo(float).eps
+    allocator_saturation_negative_next = unallocated_control[:3] < -np.finfo(float).eps
+
+    motor_speed = motor_speed_from_setpoint(motor_setpoint, step_dt, prev_motor_speed)
+    rotor_forces, force_body, torque_body_raw = motor_speed_to_force_torque(motor_speed)
+    if USE_RATE_INT_BIAS_TORQUE:
+        bias_torque = estimate_rate_int_bias_torque(rate_int, thrust_setpoint[2], step_dt)
+    else:
+        bias_torque = np.zeros(3)
+    torque_body = torque_body_raw - bias_torque
+    acc_ned = quat_to_rotmat(q_prev) @ force_body / DRONE_MASS + np.array([0.0, 0.0, A_OF_GRAVITY])
+    inertia_omega = DRONE_INERTIA @ w_prev
+    omega_dot_phys = np.linalg.solve(DRONE_INERTIA, torque_body - np.cross(w_prev, inertia_omega))
+    acc_for_dynamics = acc_ned.copy()
+
     if acc_delay_buffer is not None and acc_delay_steps > 0:
         while len(acc_delay_buffer) < acc_delay_steps:
             acc_delay_buffer.append(acc_for_dynamics.copy())
         acc_delay_buffer.append(acc_for_dynamics.copy())
         acc_for_dynamics = acc_delay_buffer.pop(0)
 
-    omega_for_dynamics = omega_setpoint
+    omega_dot_for_dynamics = omega_dot_phys.copy()
     if rate_delay_buffer is not None and rate_delay_steps > 0:
         while len(rate_delay_buffer) < rate_delay_steps:
-            rate_delay_buffer.append(w_prev.copy())
-        rate_delay_buffer.append(omega_setpoint.copy())
-        omega_for_dynamics = rate_delay_buffer.pop(0)
+            rate_delay_buffer.append(np.zeros(3))
+        rate_delay_buffer.append(omega_dot_for_dynamics.copy())
+        omega_dot_for_dynamics = rate_delay_buffer.pop(0)
+
+    w_next = w_prev + omega_dot_for_dynamics * step_dt
+    w_mid = 0.5 * (w_prev + w_next)
 
     next_var = var.copy()
     next_var[STATE_INDEX["x"]] += v_prev[0] * step_dt
@@ -453,46 +852,74 @@ def cu_mpc_simulator_step(
     next_var[STATE_INDEX["vz"]] = v_prev[2] + acc_for_dynamics[2] * step_dt
 
     q_dot = np.array([
-        -0.5 * (q_prev[1] * w_prev[0] + q_prev[2] * w_prev[1] + q_prev[3] * w_prev[2]),
-        0.5 * (q_prev[0] * w_prev[0] + q_prev[2] * w_prev[2] - q_prev[3] * w_prev[1]),
-        0.5 * (q_prev[0] * w_prev[1] - q_prev[1] * w_prev[2] + q_prev[3] * w_prev[0]),
-        0.5 * (q_prev[0] * w_prev[2] + q_prev[1] * w_prev[1] - q_prev[2] * w_prev[0]),
+        -0.5 * (q_prev[1] * w_mid[0] + q_prev[2] * w_mid[1] + q_prev[3] * w_mid[2]),
+        0.5 * (q_prev[0] * w_mid[0] + q_prev[2] * w_mid[2] - q_prev[3] * w_mid[1]),
+        0.5 * (q_prev[0] * w_mid[1] - q_prev[1] * w_mid[2] + q_prev[3] * w_mid[0]),
+        0.5 * (q_prev[0] * w_mid[2] + q_prev[1] * w_mid[1] - q_prev[2] * w_mid[0]),
     ])
     next_var[0:4] = normalize(q_prev + q_dot * step_dt)
-    next_var[STATE_INDEX["wx"]] = omega_for_dynamics[0]
-    next_var[STATE_INDEX["wy"]] = omega_for_dynamics[1]
-    next_var[STATE_INDEX["wz"]] = omega_for_dynamics[2]
+    next_var[STATE_INDEX["wx"]] = w_next[0]
+    next_var[STATE_INDEX["wy"]] = w_next[1]
+    next_var[STATE_INDEX["wz"]] = w_next[2]
 
     vel_int_next = vel_int.copy()
     vel_int_next[0] += vel_error_for_int[0] * MPC_XY_VEL_I_ACC * step_dt
     vel_int_next[1] += vel_error_for_int[1] * MPC_XY_VEL_I_ACC * step_dt
     vel_int_next[2] += vel_error_for_int[2] * MPC_Z_VEL_I_ACC * step_dt
     vel_int_next[2] = np.clip(vel_int_next[2], -A_OF_GRAVITY, A_OF_GRAVITY)
-    rate_int_next = rate_int.copy()
-    rate_int_next[0] += rate_error[0] * MC_ROLLRATE_I * step_dt
-    rate_int_next[1] += rate_error[1] * MC_PITCHRATE_I * step_dt
-    rate_int_next[2] += rate_error[2] * MC_YAWRATE_I * step_dt
-
     return next_var, vel_dot_lpf, vel_int_next, {
         "vel_sp": vel_setpoint,
         "acc_sp": acc_setpoint,
         "att_sp": att_setpoint,
         "rate_sp": omega_setpoint,
-        "rate_sp_used": omega_for_dynamics,
+        "rate_sp_used": w_next,
         "acc_sp_used": acc_for_dynamics,
         "thr_sp": thrust_setpoint,
         "torque_sp": torque_setpoint,
+        "torque_sp_unfiltered": torque_setpoint_unfiltered,
+        "torque_p": torque_p,
+        "torque_i": torque_i,
+        "torque_d": torque_d,
+        "torque_ff": torque_ff,
         "motor_sp": motor_setpoint,
-        "motor_from_px4_torque": np.full(4, np.nan),
-        "phys_acc": physical["acc_ned"],
-        "phys_wdot": physical["omega_dot"],
-        "phys_force": physical["force_body"],
-        "phys_torque": physical["torque_body"],
+        "motor_from_px4_torque": motor_setpoint,
+        "phys_acc": acc_ned,
+        "phys_wdot": omega_dot_phys,
+        "rate_derivative": omega_dot,
+        "rate_derivative_next": omega_dot,
+        "rate_int": rate_int,
+        "phys_force": force_body,
+        "phys_torque": torque_body,
+        "phys_torque_raw": torque_body_raw,
+        "bias_torque": bias_torque,
+        "motor_speed": motor_speed,
         "rate_int_next": rate_int_next,
+        "yaw_torque_lpf_next": yaw_torque_lpf_next,
+        "allocator_unallocated_torque": unallocated_control[:3],
+        "allocator_saturation_positive": allocator_saturation_positive_next,
+        "allocator_saturation_negative": allocator_saturation_negative_next,
     }
 
 
-def build_history(df, step_dt, rate_delay_steps=RATE_DELAY_STEPS, acc_delay_steps=ACC_DELAY_STEPS):
+RATE_INT_COLUMNS = ["rollspeed_integ", "pitchspeed_integ", "yawspeed_integ"]
+
+
+def logged_rate_int_from_row(row):
+    if all(col in row.index for col in RATE_INT_COLUMNS):
+        logged_rate_int = row[RATE_INT_COLUMNS].to_numpy(float)
+        if np.all(np.isfinite(logged_rate_int)):
+            return logged_rate_int
+    return None
+
+
+def build_history(
+    df,
+    step_dt,
+    rate_delay_steps=RATE_DELAY_STEPS,
+    acc_delay_steps=ACC_DELAY_STEPS,
+    rate_int_sync_period=RATE_INT_SYNC_PERIOD,
+    return_context=False,
+):
     n = len(df)
     pred_next = np.full((n, len(STATE_NAMES)), np.nan)
     actual = np.full((n, len(STATE_NAMES)), np.nan)
@@ -504,35 +931,120 @@ def build_history(df, step_dt, rate_delay_steps=RATE_DELAY_STEPS, acc_delay_step
         "rate_sp": np.full((n, 3), np.nan),
         "thr_sp": np.full((n, 3), np.nan),
         "torque_sp": np.full((n, 3), np.nan),
+        "torque_sp_unfiltered": np.full((n, 3), np.nan),
+        "torque_p": np.full((n, 3), np.nan),
+        "torque_i": np.full((n, 3), np.nan),
+        "torque_d": np.full((n, 3), np.nan),
+        "torque_ff": np.full((n, 3), np.nan),
         "motor_sp": np.full((n, 4), np.nan),
         "motor_from_px4_torque": np.full((n, 4), np.nan),
         "phys_acc": np.full((n, 3), np.nan),
         "phys_wdot": np.full((n, 3), np.nan),
+        "rate_derivative": np.full((n, 3), np.nan),
+        "rate_int": np.full((n, 3), np.nan),
+        "allocator_unallocated_torque": np.full((n, 3), np.nan),
         "phys_force": np.full((n, 3), np.nan),
         "phys_torque": np.full((n, 3), np.nan),
+        "phys_torque_raw": np.full((n, 3), np.nan),
+        "bias_torque": np.full((n, 3), np.nan),
+        "motor_speed": np.full((n, 4), np.nan),
     }
 
     prev_vel = df.loc[0, ["vel_x", "vel_y", "vel_z"]].to_numpy(float)
     prev_omega = df.loc[0, ["angular_vel_x", "angular_vel_y", "angular_vel_z"]].to_numpy(float)
+    prev_omega_dot = np.zeros(3)
     prev_acc = np.zeros(3)
     vel_int = np.zeros(3)
     rate_int = np.zeros(3)
+    logged_rate_int = logged_rate_int_from_row(df.loc[0])
+    if logged_rate_int is not None:
+        rate_int = logged_rate_int.copy()
+    next_rate_int_sync_time = (
+        float(df.loc[0, "control_time_s"]) + rate_int_sync_period
+        if rate_int_sync_period and rate_int_sync_period > 0.0
+        else np.inf
+    )
+    motor_speed = np.zeros(4)
     hover_thrust = MPC_THR_HOVER
     last_hover_thrust_log = np.nan
     last_acc_sp = np.zeros(3)
     rate_delay_buffer = []
     acc_delay_buffer = []
+    yaw_torque_lpf_state = None
+    allocator_saturation_positive = np.zeros(3, dtype=bool)
+    allocator_saturation_negative = np.zeros(3, dtype=bool)
     takeoff_ramp_vz_init = -A_OF_GRAVITY / max(MPC_Z_VEL_P_ACC, 0.01)
     takeoff_ramp_progress = 0.0
     takeoff_state = TAKEOFF_STATE_SPOOLUP
     spoolup_elapsed = 0.0
+    context_hist = None
+    if return_context:
+        context_hist = {
+            "prev_vel": np.full((n, 3), np.nan),
+            "prev_acc": np.full((n, 3), np.nan),
+            "vel_int": np.full((n, 3), np.nan),
+            "prev_omega": np.full((n, 3), np.nan),
+            "prev_omega_dot": np.full((n, 3), np.nan),
+            "rate_int": np.full((n, 3), np.nan),
+            "motor_speed": np.full((n, 4), np.nan),
+            "yaw_torque_lpf_state": np.full(n, np.nan),
+            "allocator_saturation_positive": np.zeros((n, 3), dtype=bool),
+            "allocator_saturation_negative": np.zeros((n, 3), dtype=bool),
+            "rate_delay_buffer": [],
+            "acc_delay_buffer": [],
+            "hover_thrust": np.full(n, np.nan),
+            "z_vel_max_up": np.full(n, np.nan),
+            "thrust_min": np.full(n, np.nan),
+            "no_thrust": np.zeros(n, dtype=bool),
+            "tilt_limit": np.full(n, np.nan),
+            "landed_or_maybe_landed": np.zeros(n, dtype=bool),
+        }
 
     for i in range(n):
         row = df.iloc[i]
+        if i > 0 and "_segment_id" in df.columns and row["_segment_id"] != df.iloc[i - 1]["_segment_id"]:
+            local_sp_vel = np.array([
+                row["local_sp_vx"] if "local_sp_vx" in row.index else np.nan,
+                row["local_sp_vy"] if "local_sp_vy" in row.index else np.nan,
+                row["local_sp_vz"] if "local_sp_vz" in row.index else np.nan,
+            ], dtype=float)
+            local_sp_acc = np.array([
+                row["local_sp_ax"] if "local_sp_ax" in row.index else np.nan,
+                row["local_sp_ay"] if "local_sp_ay" in row.index else np.nan,
+                row["local_sp_az"] if "local_sp_az" in row.index else np.nan,
+            ], dtype=float)
+            current_vel = row[["vel_x", "vel_y", "vel_z"]].to_numpy(float)
+            finite_controller_output = np.all(np.isfinite(local_sp_vel)) and np.all(np.isfinite(local_sp_acc))
+            finite_controller_output = finite_controller_output and abs(local_sp_acc[2]) < 50.0
+            if finite_controller_output:
+                vel_error_at_boundary = local_sp_vel - current_vel
+                vel_int = np.array([
+                    local_sp_acc[0] - MPC_XY_VEL_P_ACC * vel_error_at_boundary[0] + MPC_XY_VEL_D_ACC * prev_acc[0],
+                    local_sp_acc[1] - MPC_XY_VEL_P_ACC * vel_error_at_boundary[1] + MPC_XY_VEL_D_ACC * prev_acc[1],
+                    local_sp_acc[2] - MPC_Z_VEL_P_ACC * vel_error_at_boundary[2] + MPC_Z_VEL_D_ACC * prev_acc[2],
+                ])
+                vel_int[2] = np.clip(vel_int[2], -A_OF_GRAVITY, A_OF_GRAVITY)
+            logged_rate_int = logged_rate_int_from_row(row)
+            if logged_rate_int is not None:
+                rate_int = logged_rate_int.copy()
+                next_rate_int_sync_time = (
+                    float(row["control_time_s"]) + rate_int_sync_period
+                    if rate_int_sync_period and rate_int_sync_period > 0.0
+                    else np.inf
+                )
         s = state_from_row(row)
         actual[i] = s
         if i + 1 < n:
             actual_next[i] = state_from_row(df.iloc[i + 1])
+
+        if rate_int_sync_period and rate_int_sync_period > 0.0:
+            row_time = float(row["control_time_s"])
+            if row_time + 0.5 * step_dt >= next_rate_int_sync_time:
+                logged_rate_int = logged_rate_int_from_row(row)
+                if logged_rate_int is not None:
+                    rate_int = logged_rate_int.copy()
+                while next_rate_int_sync_time <= row_time + 0.5 * step_dt:
+                    next_rate_int_sync_time += rate_int_sync_period
 
         pos_sp, yaw_sp = input_from_row(row)
         if "hover_thrust" in row.index and "hover_thrust_valid" in row.index:
@@ -602,6 +1114,27 @@ def build_history(df, step_dt, rate_delay_steps=RATE_DELAY_STEPS, acc_delay_step
         if not flying:
             hover_thrust = MPC_THR_HOVER
 
+        if return_context:
+            context_hist["prev_vel"][i] = prev_vel.copy()
+            context_hist["prev_acc"][i] = prev_acc.copy()
+            context_hist["vel_int"][i] = vel_int.copy()
+            context_hist["prev_omega"][i] = prev_omega.copy()
+            context_hist["prev_omega_dot"][i] = prev_omega_dot.copy()
+            context_hist["rate_int"][i] = rate_int.copy()
+            context_hist["motor_speed"][i] = motor_speed.copy()
+            if yaw_torque_lpf_state is not None and np.isfinite(yaw_torque_lpf_state):
+                context_hist["yaw_torque_lpf_state"][i] = float(yaw_torque_lpf_state)
+            context_hist["allocator_saturation_positive"][i] = allocator_saturation_positive.copy()
+            context_hist["allocator_saturation_negative"][i] = allocator_saturation_negative.copy()
+            context_hist["rate_delay_buffer"].append([entry.copy() for entry in rate_delay_buffer])
+            context_hist["acc_delay_buffer"].append([entry.copy() for entry in acc_delay_buffer])
+            context_hist["hover_thrust"][i] = hover_thrust
+            context_hist["z_vel_max_up"][i] = z_vel_max_up
+            context_hist["thrust_min"][i] = thrust_min
+            context_hist["no_thrust"][i] = bool(not_taken_off or flying_but_ground_contact)
+            context_hist["tilt_limit"][i] = tilt_limit
+            context_hist["landed_or_maybe_landed"][i] = bool(landed or maybe_landed)
+
         s_next, prev_acc, vel_int, debug = cu_mpc_simulator_step(
             s, pos_sp, yaw_sp, prev_vel, prev_acc, vel_int, step_dt,
             prev_omega=prev_omega, rate_int=rate_int,
@@ -612,18 +1145,29 @@ def build_history(df, step_dt, rate_delay_steps=RATE_DELAY_STEPS, acc_delay_step
             rate_delay_steps=rate_delay_steps,
             acc_delay_buffer=acc_delay_buffer,
             acc_delay_steps=acc_delay_steps,
+            landed_or_maybe_landed=(landed or maybe_landed),
+            saturation_positive=allocator_saturation_positive,
+            saturation_negative=allocator_saturation_negative,
+            yaw_torque_lpf_state=yaw_torque_lpf_state,
+            prev_motor_speed=motor_speed,
+            prev_omega_dot=prev_omega_dot,
         )
         rate_int = debug.get("rate_int_next", rate_int)
+        prev_omega_dot = debug.get("rate_derivative_next", prev_omega_dot)
+        motor_speed = debug.get("motor_speed", motor_speed)
+        yaw_torque_lpf_state = debug.get("yaw_torque_lpf_next", yaw_torque_lpf_state)
+        allocator_saturation_positive = debug.get("allocator_saturation_positive", allocator_saturation_positive)
+        allocator_saturation_negative = debug.get("allocator_saturation_negative", allocator_saturation_negative)
         last_acc_sp = debug["acc_sp"].copy()
         pred_next[i] = s_next
         for key in calc:
             if key in debug:
                 calc[key][i] = debug[key]
-        if all(col in row.index for col in ["torque_sp_x", "torque_sp_y", "torque_sp_z"]):
-            px4_torque = row[["torque_sp_x", "torque_sp_y", "torque_sp_z"]].to_numpy(float)
-            calc["motor_from_px4_torque"][i] = mix_px4_quad_x(debug["thr_sp"], px4_torque)
         prev_vel = s[[STATE_INDEX["vx"], STATE_INDEX["vy"], STATE_INDEX["vz"]]].copy()
         prev_omega = s[[STATE_INDEX["wx"], STATE_INDEX["wy"], STATE_INDEX["wz"]]].copy()
+
+    if return_context:
+        return actual, actual_next, pred_next, calc, context_hist
 
     return actual, actual_next, pred_next, calc
 
@@ -650,12 +1194,23 @@ def setpoint_legend_base(key):
         "rate_sp": "omega_setpoint",
         "thr_sp": "thrust_setpoint",
         "torque_sp": "torque_setpoint",
+        "torque_sp_unfiltered": "torque_setpoint_unfiltered",
+        "torque_p": "torque_p",
+        "torque_i": "torque_i",
+        "torque_d": "torque_d",
+        "torque_ff": "torque_ff",
         "motor_sp": "actuator_motor",
-        "motor_from_px4_torque": "actuator_motor_from_px4_torque",
+        "motor_from_px4_torque": "allocator",
         "phys_acc": "physical_acceleration",
         "phys_wdot": "physical_angular_acceleration",
+        "rate_derivative": "rate_derivative",
+        "rate_int": "rate_integral",
+        "allocator_unallocated_torque": "allocator_unallocated_torque",
         "phys_force": "physical_force_body",
         "phys_torque": "physical_torque_body",
+        "phys_torque_raw": "physical_torque_body_raw",
+        "bias_torque": "rate_int_bias_torque",
+        "motor_speed": "motor_speed",
     }
     return bases.get(key, key)
 
@@ -668,17 +1223,28 @@ def setpoint_component_name(key, axis):
         "rate_sp": ["roll_rate_setpoint", "pitch_rate_setpoint", "yaw_rate_setpoint"],
         "thr_sp": ["thrust_x_setpoint", "thrust_y_setpoint", "thrust_z_setpoint"],
         "torque_sp": ["torque_x_setpoint", "torque_y_setpoint", "torque_z_setpoint"],
+        "torque_sp_unfiltered": ["torque_x_unfiltered", "torque_y_unfiltered", "torque_z_unfiltered"],
+        "torque_p": ["torque_p_x", "torque_p_y", "torque_p_z"],
+        "torque_i": ["torque_i_x", "torque_i_y", "torque_i_z"],
+        "torque_d": ["torque_d_x", "torque_d_y", "torque_d_z"],
+        "torque_ff": ["torque_ff_x", "torque_ff_y", "torque_ff_z"],
         "motor_sp": ["actuator_motor_0", "actuator_motor_1", "actuator_motor_2", "actuator_motor_3"],
         "motor_from_px4_torque": [
-            "actuator_motor_0_from_px4_torque",
-            "actuator_motor_1_from_px4_torque",
-            "actuator_motor_2_from_px4_torque",
-            "actuator_motor_3_from_px4_torque",
+            "allocator_0",
+            "allocator_1",
+            "allocator_2",
+            "allocator_3",
         ],
         "phys_acc": ["physical_acceleration_x", "physical_acceleration_y", "physical_acceleration_z"],
         "phys_wdot": ["physical_angular_acceleration_x", "physical_angular_acceleration_y", "physical_angular_acceleration_z"],
+        "rate_derivative": ["rate_derivative_x", "rate_derivative_y", "rate_derivative_z"],
+        "rate_int": ["rate_integral_x", "rate_integral_y", "rate_integral_z"],
+        "allocator_unallocated_torque": ["unallocated_torque_x", "unallocated_torque_y", "unallocated_torque_z"],
         "phys_force": ["physical_force_body_x", "physical_force_body_y", "physical_force_body_z"],
         "phys_torque": ["physical_torque_body_x", "physical_torque_body_y", "physical_torque_body_z"],
+        "phys_torque_raw": ["physical_torque_body_raw_x", "physical_torque_body_raw_y", "physical_torque_body_raw_z"],
+        "bias_torque": ["rate_int_bias_torque_x", "rate_int_bias_torque_y", "rate_int_bias_torque_z"],
+        "motor_speed": ["motor_speed_0", "motor_speed_1", "motor_speed_2", "motor_speed_3"],
     }
     names = components.get(key)
     if names is None or axis >= len(names):
@@ -757,6 +1323,7 @@ def main():
     parser.add_argument("--dt", type=float, default=DT)
     parser.add_argument("--rate-delay-steps", type=int, default=RATE_DELAY_STEPS)
     parser.add_argument("--acc-delay-steps", type=int, default=ACC_DELAY_STEPS)
+    parser.add_argument("--rate-int-sync-period", type=float, default=RATE_INT_SYNC_PERIOD)
     args = parser.parse_args()
 
     df = pd.read_csv(args.csv_path)
@@ -771,6 +1338,7 @@ def main():
         args.dt,
         rate_delay_steps=args.rate_delay_steps,
         acc_delay_steps=args.acc_delay_steps,
+        rate_int_sync_period=args.rate_int_sync_period,
     )
     active_plot_mask = non_idle_plot_mask(df)
     if np.any(active_plot_mask):
@@ -790,6 +1358,8 @@ def main():
         "torque_x": "torque_sp_x", "torque_y": "torque_sp_y", "torque_z": "torque_sp_z",
         "motor0": "actuator_motor_0", "motor1": "actuator_motor_1",
         "motor2": "actuator_motor_2", "motor3": "actuator_motor_3",
+        "allocator0": "allocator_0", "allocator1": "allocator_1",
+        "allocator2": "allocator_2", "allocator3": "allocator_3",
     }
     requested_state = args.state.strip()
     delta_mode = requested_state.startswith("d") and len(requested_state) > 1
@@ -824,6 +1394,21 @@ def main():
         "torque_sp_x": ("torque_sp", 0, "torque_sp_x"),
         "torque_sp_y": ("torque_sp", 1, "torque_sp_y"),
         "torque_sp_z": ("torque_sp", 2, "torque_sp_z"),
+        "torque_unfiltered_x": ("torque_sp_unfiltered", 0, "torque_sp_x"),
+        "torque_unfiltered_y": ("torque_sp_unfiltered", 1, "torque_sp_y"),
+        "torque_unfiltered_z": ("torque_sp_unfiltered", 2, "torque_sp_z"),
+        "torque_p_x": ("torque_p", 0, None),
+        "torque_p_y": ("torque_p", 1, None),
+        "torque_p_z": ("torque_p", 2, None),
+        "torque_i_x": ("torque_i", 0, None),
+        "torque_i_y": ("torque_i", 1, None),
+        "torque_i_z": ("torque_i", 2, None),
+        "torque_d_x": ("torque_d", 0, None),
+        "torque_d_y": ("torque_d", 1, None),
+        "torque_d_z": ("torque_d", 2, None),
+        "torque_ff_x": ("torque_ff", 0, None),
+        "torque_ff_y": ("torque_ff", 1, None),
+        "torque_ff_z": ("torque_ff", 2, None),
         "actuator_motor_0": ("motor_sp", 0, "actuator_motor_0"),
         "actuator_motor_1": ("motor_sp", 1, "actuator_motor_1"),
         "actuator_motor_2": ("motor_sp", 2, "actuator_motor_2"),
@@ -832,24 +1417,52 @@ def main():
         "actuator_motor_1_px4mix": ("motor_from_px4_torque", 1, "actuator_motor_1"),
         "actuator_motor_2_px4mix": ("motor_from_px4_torque", 2, "actuator_motor_2"),
         "actuator_motor_3_px4mix": ("motor_from_px4_torque", 3, "actuator_motor_3"),
+        "allocator_0": ("motor_from_px4_torque", 0, "actuator_motor_0"),
+        "allocator_1": ("motor_from_px4_torque", 1, "actuator_motor_1"),
+        "allocator_2": ("motor_from_px4_torque", 2, "actuator_motor_2"),
+        "allocator_3": ("motor_from_px4_torque", 3, "actuator_motor_3"),
+        "motor_speed_0": ("motor_speed", 0, None),
+        "motor_speed_1": ("motor_speed", 1, None),
+        "motor_speed_2": ("motor_speed", 2, None),
+        "motor_speed_3": ("motor_speed", 3, None),
         "phys_acc_x": ("phys_acc", 0, None),
         "phys_acc_y": ("phys_acc", 1, None),
         "phys_acc_z": ("phys_acc", 2, None),
         "phys_wdot_x": ("phys_wdot", 0, None),
         "phys_wdot_y": ("phys_wdot", 1, None),
         "phys_wdot_z": ("phys_wdot", 2, None),
+        "rate_derivative_x": ("rate_derivative", 0, None),
+        "rate_derivative_y": ("rate_derivative", 1, None),
+        "rate_derivative_z": ("rate_derivative", 2, None),
+        "rate_int_x": ("rate_int", 0, None),
+        "rate_int_y": ("rate_int", 1, None),
+        "rate_int_z": ("rate_int", 2, None),
+        "unallocated_torque_x": ("allocator_unallocated_torque", 0, None),
+        "unallocated_torque_y": ("allocator_unallocated_torque", 1, None),
+        "unallocated_torque_z": ("allocator_unallocated_torque", 2, None),
         "phys_force_x": ("phys_force", 0, None),
         "phys_force_y": ("phys_force", 1, None),
         "phys_force_z": ("phys_force", 2, None),
         "phys_torque_x": ("phys_torque", 0, None),
         "phys_torque_y": ("phys_torque", 1, None),
         "phys_torque_z": ("phys_torque", 2, None),
+        "phys_torque_raw_x": ("phys_torque_raw", 0, None),
+        "phys_torque_raw_y": ("phys_torque_raw", 1, None),
+        "phys_torque_raw_z": ("phys_torque_raw", 2, None),
+        "bias_torque_x": ("bias_torque", 0, None),
+        "bias_torque_y": ("bias_torque", 1, None),
+        "bias_torque_z": ("bias_torque", 2, None),
     }
     setpoint_groups = {
         "thrust": ["thr_sp_x", "thr_sp_y", "thr_sp_z"],
         "thr_sp": ["thr_sp_x", "thr_sp_y", "thr_sp_z"],
         "torque": ["torque_sp_x", "torque_sp_y", "torque_sp_z"],
         "torque_sp": ["torque_sp_x", "torque_sp_y", "torque_sp_z"],
+        "torque_unfiltered": ["torque_unfiltered_x", "torque_unfiltered_y", "torque_unfiltered_z"],
+        "torque_p": ["torque_p_x", "torque_p_y", "torque_p_z"],
+        "torque_i": ["torque_i_x", "torque_i_y", "torque_i_z"],
+        "torque_d": ["torque_d_x", "torque_d_y", "torque_d_z"],
+        "torque_ff": ["torque_ff_x", "torque_ff_y", "torque_ff_z"],
         "actuator_motors": ["actuator_motor_0", "actuator_motor_1", "actuator_motor_2", "actuator_motor_3"],
         "motors": ["actuator_motor_0", "actuator_motor_1", "actuator_motor_2", "actuator_motor_3"],
         "actuator_motors_px4mix": [
@@ -858,10 +1471,17 @@ def main():
             "actuator_motor_2_px4mix",
             "actuator_motor_3_px4mix",
         ],
+        "allocator": ["allocator_0", "allocator_1", "allocator_2", "allocator_3"],
         "phys_acc": ["phys_acc_x", "phys_acc_y", "phys_acc_z"],
         "phys_wdot": ["phys_wdot_x", "phys_wdot_y", "phys_wdot_z"],
+        "rate_derivative": ["rate_derivative_x", "rate_derivative_y", "rate_derivative_z"],
+        "rate_int": ["rate_int_x", "rate_int_y", "rate_int_z"],
+        "unallocated_torque": ["unallocated_torque_x", "unallocated_torque_y", "unallocated_torque_z"],
         "phys_force": ["phys_force_x", "phys_force_y", "phys_force_z"],
         "phys_torque": ["phys_torque_x", "phys_torque_y", "phys_torque_z"],
+        "phys_torque_raw": ["phys_torque_raw_x", "phys_torque_raw_y", "phys_torque_raw_z"],
+        "bias_torque": ["bias_torque_x", "bias_torque_y", "bias_torque_z"],
+        "motor_speed": ["motor_speed_0", "motor_speed_1", "motor_speed_2", "motor_speed_3"],
     }
 
     dual_state_plot = (not delta_mode) and (state in dynamics_sources or state in euler_sources)
@@ -887,7 +1507,7 @@ def main():
                 log_mask = finite_plot_mask(t, log_value) & active_plot_mask
                 group_ax.plot(
                     plot_t[log_mask], log_value[log_mask],
-                    color="tab:orange", linestyle="--", linewidth=2.0, zorder=3,
+                    color="tab:orange", linewidth=2.0, zorder=3,
                     label=f"{legend_base}_px4",
                 )
             group_ax.set_title(legend_base)
@@ -919,7 +1539,7 @@ def main():
             log_mask = finite_plot_mask(t, log_value) & active_plot_mask
             ax.plot(
                 plot_t[log_mask], log_value[log_mask],
-                color="tab:orange", linestyle="--", linewidth=2.0, zorder=3,
+                color="tab:orange", linewidth=2.0, zorder=3,
                 label=f"{legend_base}_px4",
             )
         ax.set_ylabel("setpoint")
@@ -931,7 +1551,7 @@ def main():
             mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
             plot_title = f"d{state_name}"
             ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
-            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"d{state_name}_actual")
+            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linewidth=2.0, label=f"d{state_name}_actual")
             ax.set_ylabel("")
         else:
             actual_value = actual[:, idx]
@@ -939,18 +1559,23 @@ def main():
             actual_mask = finite_plot_mask(t, actual_value) & active_plot_mask
             model_mask = finite_plot_mask(t, model_value) & active_plot_mask
             plot_title = state_name
-            ax.plot(plot_t[actual_mask], actual_value[actual_mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"{state_name}_actual")
+            ax.plot(plot_t[actual_mask], actual_value[actual_mask], color="tab:orange", linewidth=2.0, label=f"{state_name}_actual")
             ax.plot(plot_t[model_mask] + args.dt, model_value[model_mask], color="tab:cyan", linewidth=2.0, label=f"{state_name}_model")
             ax.set_title(state_name)
             ax.set_ylabel("state")
             ax = axes[1]
-            model_delta = pred_next[:, idx] - actual[:, idx]
-            log_delta = actual_next[:, idx] - actual[:, idx]
-            mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
-            ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
-            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"d{state_name}_actual")
-            ax.set_title(f"d{state_name}")
-            ax.set_ylabel("")
+            state_error = pred_next[:, idx] - actual_next[:, idx]
+            error_mask = finite_plot_mask(t, state_error) & active_plot_mask
+            ax.plot(
+                plot_t[error_mask] + args.dt,
+                state_error[error_mask],
+                color="tab:red",
+                linewidth=2.0,
+                label=f"{state_name}_model_actual_error",
+            )
+            ax.axhline(0.0, color="0.35", linewidth=1.0)
+            ax.set_title(f"{state_name} error")
+            ax.set_ylabel("model - actual")
     elif state in euler_sources:
         axis = euler_sources[state]
         pred_euler = np.array([quat_to_euler(q) for q in pred_next[:, 0:4]])
@@ -962,7 +1587,7 @@ def main():
             mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
             plot_title = f"d{state_name}"
             ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
-            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"d{state_name}_actual")
+            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linewidth=2.0, label=f"d{state_name}_actual")
             ax.set_ylabel("")
         else:
             actual_value = actual_euler[:, axis]
@@ -970,18 +1595,23 @@ def main():
             actual_mask = finite_plot_mask(t, actual_value) & active_plot_mask
             model_mask = finite_plot_mask(t, model_value) & active_plot_mask
             plot_title = state_name
-            ax.plot(plot_t[actual_mask], actual_value[actual_mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"{state_name}_actual")
+            ax.plot(plot_t[actual_mask], actual_value[actual_mask], color="tab:orange", linewidth=2.0, label=f"{state_name}_actual")
             ax.plot(plot_t[model_mask] + args.dt, model_value[model_mask], color="tab:cyan", linewidth=2.0, label=f"{state_name}_model")
             ax.set_title(state_name)
             ax.set_ylabel("state")
             ax = axes[1]
-            model_delta = pred_euler[:, axis] - actual_euler[:, axis]
-            log_delta = actual_next_euler[:, axis] - actual_euler[:, axis]
-            mask = finite_plot_mask(t, model_delta, log_delta) & active_plot_mask
-            ax.plot(plot_t[mask], model_delta[mask], color="tab:cyan", linewidth=2.0, label=f"d{state_name}_model")
-            ax.plot(plot_t[mask], log_delta[mask], color="tab:orange", linestyle="--", linewidth=2.0, label=f"d{state_name}_actual")
-            ax.set_title(f"d{state_name}")
-            ax.set_ylabel("")
+            state_error = pred_euler[:, axis] - actual_next_euler[:, axis]
+            error_mask = finite_plot_mask(t, state_error) & active_plot_mask
+            ax.plot(
+                plot_t[error_mask] + args.dt,
+                state_error[error_mask],
+                color="tab:red",
+                linewidth=2.0,
+                label=f"{state_name}_model_actual_error",
+            )
+            ax.axhline(0.0, color="0.35", linewidth=1.0)
+            ax.set_title(f"{state_name} error")
+            ax.set_ylabel("model - actual")
     else:
         valid = sorted(set(dynamics_sources) | set(euler_sources) | set(setpoint_sources) | set(setpoint_groups))
         print("[ERROR] state must be one of:")

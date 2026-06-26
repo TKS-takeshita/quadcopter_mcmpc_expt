@@ -7,7 +7,7 @@
 //#define PREDICTABLE_COLLISION_WITH_WALL
 //#define MCMPC_WITH_FORCE_STATE
 
-// #define SIMULATION
+//#define SIMULATION
 
 #ifdef MCMPC_WITH_FORCE_STATE
     #define _N_OF_ODES          16 //[q, av, x, v, F]
@@ -34,6 +34,9 @@
 #define _COST_Q_XP 		0.0f
 #define _COST_Q_YP 		0.0f
 #define _COST_Q_ZP 		0.0f
+#define _COST_Q_VREF_X 	0.2f
+#define _COST_Q_VREF_Y 	0.2f
+#define _COST_Q_VREF_Z 	0.2f
 #define _COST_Q_E1 		0.0f
 #define _COST_Q_E2 		0.0f
 #define _COST_Q_E3 		0.0f
@@ -45,6 +48,16 @@
 #define _COST_R_Y 	    0.0f
 #define _COST_R_Z 	    0.0f
 #define _COST_R_YAW 	0.0f
+#define _COST_TERMINAL_X 	30.0f
+#define _COST_TERMINAL_Y 	30.0f
+#define _COST_TERMINAL_Z 	30.0f
+#define _COST_TERMINAL_VX 	5.0f
+#define _COST_TERMINAL_VY 	5.0f
+#define _COST_TERMINAL_VZ 	5.0f
+#define _COST_DU_X 		0.001f
+#define _COST_DU_Y 		0.001f
+#define _COST_DU_Z 		0.001f
+#define _COST_DU_YAW 	0.0001f
 #ifdef MCMPC_WITH_FORCE_STATE
     #define _COST_Q_FX  1.0f
     #define _COST_Q_FY  1.0f
@@ -109,6 +122,12 @@ struct CONST_PARAM
     static const double MPC_Z_VEL_P_ACC;
     static const double MPC_Z_VEL_I_ACC;
     static const double MPC_Z_VEL_D_ACC;
+    static const double MPC_XY_VEL_MAX;
+    static const double MPC_Z_VEL_MAX_UP;
+    static const double MPC_Z_VEL_MAX_DOWN;
+    static const double MPC_THR_MIN;
+    static const double MPC_THR_MAX;
+    static const double MPC_THR_XY_MARGIN;
     static const double MC_YAW_WEIGHT;
     static const double MC_ROLL_P;
     static const double MC_PITCH_P;
@@ -197,6 +216,12 @@ struct CONST_PARAM_FLOAT
     static const float MPC_Z_VEL_P_ACC;
     static const float MPC_Z_VEL_I_ACC;
     static const float MPC_Z_VEL_D_ACC;
+    static const float MPC_XY_VEL_MAX;
+    static const float MPC_Z_VEL_MAX_UP;
+    static const float MPC_Z_VEL_MAX_DOWN;
+    static const float MPC_THR_MIN;
+    static const float MPC_THR_MAX;
+    static const float MPC_THR_XY_MARGIN;
     static const float MC_YAW_WEIGHT;
     static const float MC_ROLL_P;
     static const float MC_PITCH_P;

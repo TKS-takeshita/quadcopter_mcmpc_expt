@@ -8,6 +8,10 @@
 #include <px4_msgs/msg/hover_thrust_estimate.hpp>
 #include <px4_msgs/msg/takeoff_status.hpp>
 #include <px4_msgs/msg/vehicle_land_detected.hpp>
+#include <px4_msgs/msg/vehicle_angular_velocity.hpp>
+#include <px4_msgs/msg/rate_ctrl_status.hpp>
+#include <px4_msgs/msg/vehicle_torque_setpoint.hpp>
+#include <px4_msgs/msg/actuator_motors.hpp>
 
 #include <iostream>
 #include <iomanip>
@@ -31,6 +35,10 @@ static bool has_rate_sp = false;
 static bool has_hover_thrust = false;
 static bool has_takeoff_status = false;
 static bool has_land_detected = false;
+static bool has_angular_velocity = false;
+static bool has_rate_ctrl_status = false;
+static bool has_torque_sp = false;
+static bool has_actuator_motors = false;
 
 static px4_msgs::msg::VehicleLocalPositionSetpoint latest_traj_sp;
 static px4_msgs::msg::VehicleAttitudeSetpoint latest_att_sp;
@@ -38,7 +46,24 @@ static px4_msgs::msg::VehicleRatesSetpoint latest_rate_sp;
 static px4_msgs::msg::HoverThrustEstimate latest_hover_thrust;
 static px4_msgs::msg::TakeoffStatus latest_takeoff_status;
 static px4_msgs::msg::VehicleLandDetected latest_land_detected;
+static px4_msgs::msg::VehicleAngularVelocity latest_angular_velocity;
+static px4_msgs::msg::RateCtrlStatus latest_rate_ctrl_status;
+static px4_msgs::msg::VehicleTorqueSetpoint latest_torque_sp;
+static px4_msgs::msg::ActuatorMotors latest_actuator_motors;
 static std::mutex sp_mutex;
+static float motor_speed_host_for_model[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+static int motor_speed_valid_host_for_model = 0;
+static float rate_delay_buffer_host_for_model[3][3] = {
+    {0.0f, 0.0f, 0.0f},
+    {0.0f, 0.0f, 0.0f},
+    {0.0f, 0.0f, 0.0f},
+};
+static float acc_delay_buffer_host_for_model[3][3] = {
+    {0.0f, 0.0f, 0.0f},
+    {0.0f, 0.0f, 0.0f},
+    {0.0f, 0.0f, 0.0f},
+};
+static bool acc_delay_initialized_for_model = false;
 
 #include "quadcopter_mcmpc_position/const_params.hpp"
 #include "quadcopter_mcmpc_position/mcmpc_controller.cuh"
@@ -83,6 +108,8 @@ float acc_setpoint[3];
 float thrust_setpoint[3];
 float att_setpoint[4];
 float omega_setpoint[3];
+static float prev_angular_velocity_host_for_model[3] = {0.0f, 0.0f, 0.0f};
+static bool has_prev_angular_velocity_host_for_model = false;
 
 // 現在状態
 static float current_x = 0.0f;
@@ -122,6 +149,43 @@ void sin_cosf(float x, float* s, float* c){
     *c = 1.0f - x2 / 2.0f + x2 * x2 / 24.0f;
 }
 
+static float bench_rpm_from_actuator_host(float actuator)
+{
+    static constexpr float throttle[15] = {
+        0.30f, 0.35f, 0.40f, 0.45f, 0.50f,
+        0.55f, 0.60f, 0.65f, 0.70f, 0.75f,
+        0.80f, 0.85f, 0.90f, 0.95f, 1.00f
+    };
+    static constexpr float rpm[15] = {
+        4042.0f, 4469.0f, 4855.0f, 5301.0f, 5780.0f,
+        6298.0f, 6800.0f, 7281.0f, 7679.0f, 8096.0f,
+        8468.0f, 8867.0f, 9257.0f, 9675.0f, 9857.0f
+    };
+    actuator = fminf(fmaxf(actuator, 0.0f), 1.0f);
+    if (actuator < throttle[0]) {
+        return actuator / throttle[0] * rpm[0];
+    }
+    for (int i = 0; i < 14; i++) {
+        if (actuator <= throttle[i + 1]) {
+            float t = (actuator - throttle[i]) / (throttle[i + 1] - throttle[i]);
+            return rpm[i] + t * (rpm[i + 1] - rpm[i]);
+        }
+    }
+    return rpm[14];
+}
+
+static void shift_delay_buffer(float buffer[3][3], const float newest[3])
+{
+    for (int d = 0; d < 2; d++) {
+        for (int axis = 0; axis < 3; axis++) {
+            buffer[d][axis] = buffer[d + 1][axis];
+        }
+    }
+    for (int axis = 0; axis < 3; axis++) {
+        buffer[2][axis] = newest[axis];
+    }
+}
+
 void set_target_yaw(float yaw)
 {
     target_yaw = wrap_pi(yaw);
@@ -143,9 +207,25 @@ void reset_integrator_state()
     prev_acceleration_host[0] = 0.0f;
     prev_acceleration_host[1] = 0.0f;
     prev_acceleration_host[2] = 0.0f;
+    for (int i = 0; i < 4; i++) {
+        motor_speed_host_for_model[i] = 0.0f;
+    }
+    motor_speed_valid_host_for_model = 0;
+    for (int d = 0; d < 3; d++) {
+        for (int axis = 0; axis < 3; axis++) {
+            rate_delay_buffer_host_for_model[d][axis] = 0.0f;
+            acc_delay_buffer_host_for_model[d][axis] = 0.0f;
+        }
+    }
+    acc_delay_initialized_for_model = false;
     cudaMemcpyToSymbol(qc_mcmpc::prev_velocity_device, prev_velocity_host, 3*sizeof(float));
     cudaMemcpyToSymbol(qc_mcmpc::prev_acceleration_device, prev_acceleration_host, 3*sizeof(float));
     cudaMemcpyToSymbol(qc_mcmpc::vel_int_device, vel_int_host, 3*sizeof(float));
+    cudaMemcpyToSymbol(qc_mcmpc::prev_motor_speed_device, motor_speed_host_for_model, 4*sizeof(float));
+    cudaMemcpyToSymbol(qc_mcmpc::prev_motor_speed_valid_device, &motor_speed_valid_host_for_model, sizeof(int));
+    cudaMemcpyToSymbol(qc_mcmpc::initial_rate_delay_buffer_device, rate_delay_buffer_host_for_model, 9*sizeof(float));
+    cudaMemcpyToSymbol(qc_mcmpc::initial_acc_delay_buffer_device, acc_delay_buffer_host_for_model, 9*sizeof(float));
+    has_prev_angular_velocity_host_for_model = false;
 }
 
 void set_square_waypoint(int index)
@@ -385,6 +465,38 @@ void vehicle_land_detected_callback(
     has_land_detected = true;
 }
 
+void angular_velocity_callback(
+    const px4_msgs::msg::VehicleAngularVelocity::SharedPtr msg)
+{
+    std::lock_guard<std::mutex> lock(sp_mutex);
+    latest_angular_velocity = *msg;
+    has_angular_velocity = true;
+}
+
+void rate_ctrl_status_callback(
+    const px4_msgs::msg::RateCtrlStatus::SharedPtr msg)
+{
+    std::lock_guard<std::mutex> lock(sp_mutex);
+    latest_rate_ctrl_status = *msg;
+    has_rate_ctrl_status = true;
+}
+
+void torque_setpoint_callback(
+    const px4_msgs::msg::VehicleTorqueSetpoint::SharedPtr msg)
+{
+    std::lock_guard<std::mutex> lock(sp_mutex);
+    latest_torque_sp = *msg;
+    has_torque_sp = true;
+}
+
+void actuator_motors_callback(
+    const px4_msgs::msg::ActuatorMotors::SharedPtr msg)
+{
+    std::lock_guard<std::mutex> lock(sp_mutex);
+    latest_actuator_motors = *msg;
+    has_actuator_motors = true;
+}
+
 namespace quad_sim_base
 {
     void do_simulation(float var_array_to_integrate[]);
@@ -464,6 +576,10 @@ int main(int argc, char *argv[])
     auto hover_thrust_sub = node->create_subscription<px4_msgs::msg::HoverThrustEstimate>("/fmu/out/hover_thrust_estimate",qos,hover_thrust_estimate_callback);
     auto takeoff_status_sub = node->create_subscription<px4_msgs::msg::TakeoffStatus>("/fmu/out/takeoff_status",qos,takeoff_status_callback);
     auto land_detected_sub = node->create_subscription<px4_msgs::msg::VehicleLandDetected>("/fmu/out/vehicle_land_detected",qos,vehicle_land_detected_callback);
+    auto angular_velocity_sub = node->create_subscription<px4_msgs::msg::VehicleAngularVelocity>("/fmu/out/vehicle_angular_velocity",qos,angular_velocity_callback);
+    auto rate_ctrl_status_sub = node->create_subscription<px4_msgs::msg::RateCtrlStatus>("/fmu/out/rate_ctrl_status",qos,rate_ctrl_status_callback);
+    auto torque_sp_sub = node->create_subscription<px4_msgs::msg::VehicleTorqueSetpoint>("/fmu/out/vehicle_torque_setpoint",qos,torque_setpoint_callback);
+    auto actuator_motors_sub = node->create_subscription<px4_msgs::msg::ActuatorMotors>("/fmu/out/actuator_motors",qos,actuator_motors_callback);
     float var_p_save[_DEVICE_CONST_HORIZON+1][_N_OF_ODES+1];
     for(int i= 0; i<_DEVICE_CONST_HORIZON+1; i++) {
         for(int j=0; j<_N_OF_ODES+1; j++){
@@ -498,6 +614,26 @@ int main(int argc, char *argv[])
     csv << ",hover_thrust,hover_thrust_valid";
     csv << ",takeoff_state,takeoff_tilt_limit";
     csv << ",landed,ground_contact,maybe_landed";
+    csv << ",rollspeed_integ,pitchspeed_integ,yawspeed_integ";
+    csv << ",angular_accel_x,angular_accel_y,angular_accel_z";
+    csv << ",torque_sp_x,torque_sp_y,torque_sp_z";
+    for (int i = 0; i < px4_msgs::msg::ActuatorMotors::NUM_CONTROLS; i++) {
+        csv << ",actuator_motor_" << i;
+    }
+    csv << ",model_vel_int_x,model_vel_int_y,model_vel_int_z";
+    for (int i = 0; i < 4; i++) {
+        csv << ",model_motor_speed_" << i;
+    }
+    for (int d = 0; d < 3; d++) {
+        csv << ",model_rate_delay_" << d << "_x"
+            << ",model_rate_delay_" << d << "_y"
+            << ",model_rate_delay_" << d << "_z";
+    }
+    for (int d = 0; d < 3; d++) {
+        csv << ",model_acc_delay_" << d << "_x"
+            << ",model_acc_delay_" << d << "_y"
+            << ",model_acc_delay_" << d << "_z";
+    }
 
     csv << "\n";
     rclcpp::Rate rate(50);
@@ -528,6 +664,7 @@ int main(int argc, char *argv[])
         quad_sim_base::var_array_to_integrate[11] = msg->velocity[1];//vy
         quad_sim_base::var_array_to_integrate[12] = msg->velocity[2];//vz
 
+        float angular_accel_for_model[3] = {0.0f, 0.0f, 0.0f};
         {
             std::lock_guard<std::mutex> sp_lock(sp_mutex);
             float hover_thrust_for_model = CONST_PARAM_FLOAT::MPC_THR_HOVER;
@@ -546,6 +683,26 @@ int main(int argc, char *argv[])
             cudaMemcpyToSymbol(qc_mcmpc::landed_device, &landed_for_model, sizeof(int));
             cudaMemcpyToSymbol(qc_mcmpc::ground_contact_device, &ground_contact_for_model, sizeof(int));
             cudaMemcpyToSymbol(qc_mcmpc::maybe_landed_device, &maybe_landed_for_model, sizeof(int));
+            float rate_int_for_model[3] = {0.0f, 0.0f, 0.0f};
+            if (has_rate_ctrl_status) {
+                rate_int_for_model[0] = latest_rate_ctrl_status.rollspeed_integ;
+                rate_int_for_model[1] = latest_rate_ctrl_status.pitchspeed_integ;
+                rate_int_for_model[2] = latest_rate_ctrl_status.yawspeed_integ;
+            }
+            if (has_angular_velocity) {
+                angular_accel_for_model[0] = latest_angular_velocity.xyz_derivative[0];
+                angular_accel_for_model[1] = latest_angular_velocity.xyz_derivative[1];
+                angular_accel_for_model[2] = latest_angular_velocity.xyz_derivative[2];
+            }
+            cudaMemcpyToSymbol(qc_mcmpc::rate_int_device, rate_int_for_model, 3*sizeof(float));
+            cudaMemcpyToSymbol(qc_mcmpc::prev_angular_acceleration_device, angular_accel_for_model, 3*sizeof(float));
+            if (!has_prev_angular_velocity_host_for_model) {
+                prev_angular_velocity_host_for_model[0] = quad_sim_base::var_array_to_integrate[4];
+                prev_angular_velocity_host_for_model[1] = quad_sim_base::var_array_to_integrate[5];
+                prev_angular_velocity_host_for_model[2] = quad_sim_base::var_array_to_integrate[6];
+                has_prev_angular_velocity_host_for_model = true;
+            }
+            cudaMemcpyToSymbol(qc_mcmpc::prev_angular_velocity_device, prev_angular_velocity_host_for_model, 3*sizeof(float));
         }
 
         float vel_ref[3];
@@ -555,11 +712,85 @@ int main(int argc, char *argv[])
         vel_ref[2] = CONST_PARAM_FLOAT::MPC_Z_P  * (target_host.z - quad_sim_base::var_array_to_integrate[9]);
         for(int i=0;i<3;i++){
             float vel_dot = (quad_sim_base::var_array_to_integrate[i+10] - prev_velocity_host[i]) / CONST_PARAM_FLOAT::CONTROL_PERIOD;
-            acc_now[i] = prev_acceleration_host[i] + CONST_PARAM_FLOAT::LPF * (vel_dot - prev_acceleration_host[i]);
+            float vel_dot_alpha = CONST_PARAM_FLOAT::CONTROL_PERIOD /
+                (CONST_PARAM_FLOAT::CONTROL_PERIOD + 1.0f / (2.0f * M_PI * CONST_PARAM_FLOAT::MPC_VELD_LP));
+            acc_now[i] = prev_acceleration_host[i] + vel_dot_alpha * (vel_dot - prev_acceleration_host[i]);
         }
         acc_setpoint[0]= CONST_PARAM_FLOAT::MPC_XY_VEL_P_ACC*(vel_ref[0]-quad_sim_base::var_array_to_integrate[10]);
         acc_setpoint[1]= CONST_PARAM_FLOAT::MPC_XY_VEL_P_ACC*(vel_ref[1]-quad_sim_base::var_array_to_integrate[11]);
         acc_setpoint[2]= CONST_PARAM_FLOAT::MPC_Z_VEL_P_ACC* (vel_ref[2]-quad_sim_base::var_array_to_integrate[12]);
+
+        {
+            std::lock_guard<std::mutex> sp_lock(sp_mutex);
+            if (has_traj_sp &&
+                std::isfinite(latest_traj_sp.vx) &&
+                std::isfinite(latest_traj_sp.vy) &&
+                std::isfinite(latest_traj_sp.vz) &&
+                std::isfinite(latest_traj_sp.acceleration[0]) &&
+                std::isfinite(latest_traj_sp.acceleration[1]) &&
+                std::isfinite(latest_traj_sp.acceleration[2]) &&
+                std::fabs(latest_traj_sp.acceleration[2]) < 50.0f) {
+                float local_sp_vel[3] = {
+                    latest_traj_sp.vx,
+                    latest_traj_sp.vy,
+                    latest_traj_sp.vz,
+                };
+                float local_sp_acc[3] = {
+                    latest_traj_sp.acceleration[0],
+                    latest_traj_sp.acceleration[1],
+                    latest_traj_sp.acceleration[2],
+                };
+                float current_vel[3] = {
+                    quad_sim_base::var_array_to_integrate[10],
+                    quad_sim_base::var_array_to_integrate[11],
+                    quad_sim_base::var_array_to_integrate[12],
+                };
+                float vel_error_at_now[3] = {
+                    local_sp_vel[0] - current_vel[0],
+                    local_sp_vel[1] - current_vel[1],
+                    local_sp_vel[2] - current_vel[2],
+                };
+                vel_int_host[0] = local_sp_acc[0] - CONST_PARAM_FLOAT::MPC_XY_VEL_P_ACC * vel_error_at_now[0]
+                    + CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC * acc_now[0];
+                vel_int_host[1] = local_sp_acc[1] - CONST_PARAM_FLOAT::MPC_XY_VEL_P_ACC * vel_error_at_now[1]
+                    + CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC * acc_now[1];
+                vel_int_host[2] = local_sp_acc[2] - CONST_PARAM_FLOAT::MPC_Z_VEL_P_ACC * vel_error_at_now[2]
+                    + CONST_PARAM_FLOAT::MPC_Z_VEL_D_ACC * acc_now[2];
+            } else {
+                vel_int_host[0] += (vel_ref[0] - quad_sim_base::var_array_to_integrate[10]) * CONST_PARAM_FLOAT::MPC_XY_VEL_I_ACC * CONST_PARAM_FLOAT::CONTROL_PERIOD;
+                vel_int_host[1] += (vel_ref[1] - quad_sim_base::var_array_to_integrate[11]) * CONST_PARAM_FLOAT::MPC_XY_VEL_I_ACC * CONST_PARAM_FLOAT::CONTROL_PERIOD;
+                vel_int_host[2] += (vel_ref[2] - quad_sim_base::var_array_to_integrate[12]) * CONST_PARAM_FLOAT::MPC_Z_VEL_I_ACC * CONST_PARAM_FLOAT::CONTROL_PERIOD;
+            }
+
+            motor_speed_valid_host_for_model = 0;
+            if (has_actuator_motors) {
+                bool all_finite = true;
+                for (int i = 0; i < 4; i++) {
+                    float actuator = latest_actuator_motors.control[i];
+                    if (!std::isfinite(actuator)) {
+                        all_finite = false;
+                        break;
+                    }
+                    float rpm = bench_rpm_from_actuator_host(actuator);
+                    motor_speed_host_for_model[i] = rpm * (2.0f * static_cast<float>(M_PI) / 60.0f);
+                }
+                motor_speed_valid_host_for_model = all_finite ? 1 : 0;
+            }
+        }
+        vel_int_host[2] = fminf(fmaxf(vel_int_host[2], -CONST_PARAM_FLOAT::A_OF_GRAVITY), CONST_PARAM_FLOAT::A_OF_GRAVITY);
+        if (!acc_delay_initialized_for_model) {
+            for (int d = 0; d < 3; d++) {
+                for (int axis = 0; axis < 3; axis++) {
+                    acc_delay_buffer_host_for_model[d][axis] = acc_now[axis];
+                }
+            }
+            acc_delay_initialized_for_model = true;
+        }
+        cudaMemcpyToSymbol(qc_mcmpc::vel_int_device, vel_int_host, 3*sizeof(float));
+        cudaMemcpyToSymbol(qc_mcmpc::prev_motor_speed_device, motor_speed_host_for_model, 4*sizeof(float));
+        cudaMemcpyToSymbol(qc_mcmpc::prev_motor_speed_valid_device, &motor_speed_valid_host_for_model, sizeof(int));
+        cudaMemcpyToSymbol(qc_mcmpc::initial_rate_delay_buffer_device, rate_delay_buffer_host_for_model, 9*sizeof(float));
+        cudaMemcpyToSymbol(qc_mcmpc::initial_acc_delay_buffer_device, acc_delay_buffer_host_for_model, 9*sizeof(float));
 
         if (mcmpc_running) {
             float dx = target_host.x - quad_sim_base::var_array_to_integrate[7];
@@ -644,14 +875,12 @@ int main(int argc, char *argv[])
         for(int i=0;i<3;i++){
             prev_velocity_host[i] = quad_sim_base::var_array_to_integrate[i+10];
             prev_acceleration_host[i] = acc_now[i];
+            prev_angular_velocity_host_for_model[i] = quad_sim_base::var_array_to_integrate[i+4];
         }
-        vel_int_host[0] += (vel_ref[0] - quad_sim_base::var_array_to_integrate[10]) * CONST_PARAM_FLOAT::CONTROL_PERIOD;
-        vel_int_host[1] += (vel_ref[1] - quad_sim_base::var_array_to_integrate[11]) * CONST_PARAM_FLOAT::CONTROL_PERIOD;
-        vel_int_host[2] += (vel_ref[2] - quad_sim_base::var_array_to_integrate[12]) * CONST_PARAM_FLOAT::CONTROL_PERIOD;
-        vel_int_host[2] =  fminf(fmaxf(vel_int_host[2], -CONST_PARAM_FLOAT::A_OF_GRAVITY), CONST_PARAM_FLOAT::A_OF_GRAVITY);
+        shift_delay_buffer(rate_delay_buffer_host_for_model, angular_accel_for_model);
+        shift_delay_buffer(acc_delay_buffer_host_for_model, acc_now);
         cudaMemcpyToSymbol(qc_mcmpc::prev_velocity_device, prev_velocity_host, 3*sizeof(float));
         cudaMemcpyToSymbol(qc_mcmpc::prev_acceleration_device, acc_now,3*sizeof(float));
-        cudaMemcpyToSymbol(qc_mcmpc::vel_int_device, vel_int_host, 3*sizeof(float));
         if (mcmpc_running) {
             csv << mcmpc_log;
             // 現在状態（左）
@@ -722,6 +951,61 @@ int main(int argc, char *argv[])
                         << "," << static_cast<int>(latest_land_detected.maybe_landed);
                 } else {
                     csv << ",nan,nan,nan";
+                }
+
+                if (has_rate_ctrl_status) {
+                    csv << "," << latest_rate_ctrl_status.rollspeed_integ
+                        << "," << latest_rate_ctrl_status.pitchspeed_integ
+                        << "," << latest_rate_ctrl_status.yawspeed_integ;
+                } else {
+                    csv << ",nan,nan,nan";
+                }
+
+                if (has_angular_velocity) {
+                    csv << "," << latest_angular_velocity.xyz_derivative[0]
+                        << "," << latest_angular_velocity.xyz_derivative[1]
+                        << "," << latest_angular_velocity.xyz_derivative[2];
+                } else {
+                    csv << ",nan,nan,nan";
+                }
+
+                if (has_torque_sp) {
+                    csv << "," << latest_torque_sp.xyz[0]
+                        << "," << latest_torque_sp.xyz[1]
+                        << "," << latest_torque_sp.xyz[2];
+                } else {
+                    csv << ",nan,nan,nan";
+                }
+
+                if (has_actuator_motors) {
+                    for (int i = 0; i < px4_msgs::msg::ActuatorMotors::NUM_CONTROLS; i++) {
+                        csv << "," << latest_actuator_motors.control[i];
+                    }
+                } else {
+                    for (int i = 0; i < px4_msgs::msg::ActuatorMotors::NUM_CONTROLS; i++) {
+                        csv << ",nan";
+                    }
+                }
+
+                csv << "," << vel_int_host[0]
+                    << "," << vel_int_host[1]
+                    << "," << vel_int_host[2];
+                for (int i = 0; i < 4; i++) {
+                    if (motor_speed_valid_host_for_model) {
+                        csv << "," << motor_speed_host_for_model[i];
+                    } else {
+                        csv << ",nan";
+                    }
+                }
+                for (int d = 0; d < 3; d++) {
+                    csv << "," << rate_delay_buffer_host_for_model[d][0]
+                        << "," << rate_delay_buffer_host_for_model[d][1]
+                        << "," << rate_delay_buffer_host_for_model[d][2];
+                }
+                for (int d = 0; d < 3; d++) {
+                    csv << "," << acc_delay_buffer_host_for_model[d][0]
+                        << "," << acc_delay_buffer_host_for_model[d][1]
+                        << "," << acc_delay_buffer_host_for_model[d][2];
                 }
             }
 

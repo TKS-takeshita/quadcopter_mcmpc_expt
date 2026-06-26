@@ -12,11 +12,11 @@ from matplotlib.collections import LineCollection
 from matplotlib.widgets import Slider
 
 
-default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260618_084500.csv"
+default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260626_085923.csv"
 
 dt = 0.02
 prediction_start_time = 0.5
-prediction_interval = 1.5
+prediction_interval = 0.5
 
 input_alias = {
     "ux": "x",

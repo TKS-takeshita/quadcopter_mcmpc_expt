@@ -79,6 +79,12 @@ namespace qc_mcmpc{
     extern __constant__ float mpc_z_vel_i_acc;
     extern __constant__ float mpc_xy_vel_d_acc;
     extern __constant__ float mpc_z_vel_d_acc;
+    extern __constant__ float mpc_xy_vel_max;
+    extern __constant__ float mpc_z_vel_max_up;
+    extern __constant__ float mpc_z_vel_max_down;
+    extern __constant__ float mpc_thr_min;
+    extern __constant__ float mpc_thr_max;
+    extern __constant__ float mpc_thr_xy_margin;
     extern __constant__ float arw_gain;
     extern __constant__ float mc_roll_p;
     extern __constant__ float mc_pitch_p;
@@ -90,6 +96,9 @@ namespace qc_mcmpc{
     extern __constant__ float mc_rollrate_d;
     extern __constant__ float mc_pitchrate_d;
     extern __constant__ float mc_yawrate_d;
+    extern __constant__ float mc_rollrate_i;
+    extern __constant__ float mc_pitchrate_i;
+    extern __constant__ float mc_yawrate_i;
     extern __constant__ float lpf;
     extern __constant__ float mpc_thr_hover;
     extern __constant__ float mpc_vel_lp;
@@ -102,6 +111,12 @@ namespace qc_mcmpc{
     extern __constant__ float vel_int_device[3];
     extern __constant__ float prev_acceleration_device[3];
     extern __constant__ float prev_angular_velocity_device[3];
+    extern __constant__ float prev_angular_acceleration_device[3];
+    extern __constant__ float rate_int_device[3];
+    extern __constant__ float prev_motor_speed_device[4];
+    extern __constant__ int prev_motor_speed_valid_device;
+    extern __constant__ float initial_rate_delay_buffer_device[3][3];
+    extern __constant__ float initial_acc_delay_buffer_device[3][3];
 
     // __constant__ GPUのconstantメモリ（各制御周期ごとにCPUから更新）
     extern __constant__ float var_and_z_i_device[_N_OF_ODES + 1];

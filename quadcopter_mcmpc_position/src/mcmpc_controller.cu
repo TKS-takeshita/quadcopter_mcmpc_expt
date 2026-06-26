@@ -33,6 +33,12 @@ namespace qc_mcmpc
     __constant__ float mpc_z_vel_i_acc;
     __constant__ float mpc_xy_vel_d_acc;
     __constant__ float mpc_z_vel_d_acc;
+    __constant__ float mpc_xy_vel_max;
+    __constant__ float mpc_z_vel_max_up;
+    __constant__ float mpc_z_vel_max_down;
+    __constant__ float mpc_thr_min;
+    __constant__ float mpc_thr_max;
+    __constant__ float mpc_thr_xy_margin;
     __constant__ float arw_gain;
     __constant__ float mc_roll_p;
     __constant__ float mc_pitch_p;
@@ -48,11 +54,20 @@ namespace qc_mcmpc
     __constant__ float mc_rollrate_d;
     __constant__ float mc_pitchrate_d;
     __constant__ float mc_yawrate_d;
+    __constant__ float mc_rollrate_i;
+    __constant__ float mc_pitchrate_i;
+    __constant__ float mc_yawrate_i;
 
     __constant__ float prev_velocity_device[3];
     __constant__ float vel_int_device[3];
     __constant__ float prev_acceleration_device[3];
     __constant__ float prev_angular_velocity_device[3];
+    __constant__ float prev_angular_acceleration_device[3];
+    __constant__ float rate_int_device[3];
+    __constant__ float prev_motor_speed_device[4];
+    __constant__ int prev_motor_speed_valid_device;
+    __constant__ float initial_rate_delay_buffer_device[3][3];
+    __constant__ float initial_acc_delay_buffer_device[3][3];
 
     target_state_t target_host;
 
@@ -185,6 +200,12 @@ namespace qc_mcmpc
         cudaMemcpyToSymbol( mpc_z_vel_i_acc,        &CONST_PARAM_FLOAT::MPC_Z_VEL_I_ACC,     sizeof( float ) );
         cudaMemcpyToSymbol( mpc_xy_vel_d_acc,       &CONST_PARAM_FLOAT::MPC_XY_VEL_D_ACC,    sizeof( float ) );
         cudaMemcpyToSymbol( mpc_z_vel_d_acc,        &CONST_PARAM_FLOAT::MPC_Z_VEL_D_ACC,     sizeof( float ) );
+        cudaMemcpyToSymbol( mpc_xy_vel_max,         &CONST_PARAM_FLOAT::MPC_XY_VEL_MAX,      sizeof( float ) );
+        cudaMemcpyToSymbol( mpc_z_vel_max_up,       &CONST_PARAM_FLOAT::MPC_Z_VEL_MAX_UP,    sizeof( float ) );
+        cudaMemcpyToSymbol( mpc_z_vel_max_down,     &CONST_PARAM_FLOAT::MPC_Z_VEL_MAX_DOWN,  sizeof( float ) );
+        cudaMemcpyToSymbol( mpc_thr_min,            &CONST_PARAM_FLOAT::MPC_THR_MIN,         sizeof( float ) );
+        cudaMemcpyToSymbol( mpc_thr_max,            &CONST_PARAM_FLOAT::MPC_THR_MAX,         sizeof( float ) );
+        cudaMemcpyToSymbol( mpc_thr_xy_margin,      &CONST_PARAM_FLOAT::MPC_THR_XY_MARGIN,   sizeof( float ) );
         cudaMemcpyToSymbol( arw_gain,               &CONST_PARAM_FLOAT::ARW_GAIN,            sizeof( float ) );
         cudaMemcpyToSymbol( mc_roll_p,              &CONST_PARAM_FLOAT::MC_ROLL_P,           sizeof( float ) );
         cudaMemcpyToSymbol( mc_pitch_p,             &CONST_PARAM_FLOAT::MC_PITCH_P,          sizeof( float ) );
@@ -200,6 +221,9 @@ namespace qc_mcmpc
         cudaMemcpyToSymbol( mc_rollrate_d,          &CONST_PARAM_FLOAT::MC_ROLLRATE_D,       sizeof( float ) );
         cudaMemcpyToSymbol( mc_pitchrate_d,         &CONST_PARAM_FLOAT::MC_PITCHRATE_D,      sizeof( float ) );
         cudaMemcpyToSymbol( mc_yawrate_d,           &CONST_PARAM_FLOAT::MC_YAWRATE_D,        sizeof( float ) );    
+        cudaMemcpyToSymbol( mc_rollrate_i,          &CONST_PARAM_FLOAT::MC_ROLLRATE_I,       sizeof( float ) );
+        cudaMemcpyToSymbol( mc_pitchrate_i,         &CONST_PARAM_FLOAT::MC_PITCHRATE_I,      sizeof( float ) );
+        cudaMemcpyToSymbol( mc_yawrate_i,           &CONST_PARAM_FLOAT::MC_YAWRATE_I,        sizeof( float ) );
 
         cudaMemcpyToSymbol( control_period_device,        &CONST_PARAM_FLOAT::CONTROL_PERIOD,        sizeof( float ) );
         cudaMemcpyToSymbol( integration_step_size_device, &CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE, sizeof( float ) );
