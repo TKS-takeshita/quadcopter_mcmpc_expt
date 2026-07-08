@@ -54,9 +54,9 @@ import matplotlib.pyplot as plt
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib/")
 warnings.filterwarnings("ignore", message="Unable to import Axes3D.*", category=UserWarning, )
 
-DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/visualize_mcmpc/csv/offboard_control_log_sinx_8.csv"
+DEFAULT_CSV = "/home/kt182/ws_mcmpc/src/quadcopter_mcmpc_expt/visualize_mcmpc/csv/offboard_control_log_real_sin_x.csv"
 
-SIMULATION = True
+SIMULATION = False
 # prediction mode values:
 # - "actuator_log": use future logged actuator_motor values as model input.
 # - "actual_state": use logged velocity/angular velocity to integrate position/attitude.
@@ -64,6 +64,17 @@ SIMULATION = True
 MODE_ACTUATOR_LOG = "actuator_log"
 MODE_ACTUAL_STATE = "actual_state"
 MODE_MODEL_INPUT = "model_input"
+
+FUTURE_TARGET_COLUMNS = [
+    "target_x",
+    "target_y",
+    "target_z",
+    "target_yaw",
+    "target_x_delayed",
+    "target_y_delayed",
+    "target_z_delayed",
+    "target_yaw_delayed",
+]
 
 #Common Parameter
 DT                                          = 0.02
@@ -73,7 +84,7 @@ ANGULAR_ACCEL_LP                            = 30.0 #角速度微分のLPFカッ�
 MPC_ACC_DECOUPLE                            = False #PX4の加速度-スラスト変換でz加速度を切り離すか
 RATE_DELAY_STEPS                            = 0 #角速度ダイナミクスに入れる角加速度の遅れ近似
 MOTOR_COMMAND_DELAY_STEPS                   = 0 #モータ指令がモデル反映までの遅れ
-ACTUATOR_LOG_SHIFT_STEPS                    = -1 #actuato_logの時刻補正
+ACTUATOR_LOG_SHIFT_STEPS                    = -1 #actuator_logの時刻補正
 TARGET_LOCAL_SP_DELAY_STEPS                 = 2 #target local position setpointの遅れ
 RATE_INT_SYNC_PERIOD                        = 1.5 #rate controllerの積分項ログと内部推定を同期する周期
 PREDICTION_HORIZON                          = 75 #予測ステップ数
@@ -85,16 +96,28 @@ USE_LIVOX_IMU_ACCELERATION                  = True #Livox IMUの加速度をバ�
 USE_VELOCITY_DELTA_BIAS_OBSERVER            = True #1stepの速度差から加速度バイアスの推定の有効化
 USE_ACCELERATION_BIAS_TREND_PREDICTION      = True #horizon内の加速度バイアスの変化傾向の予測の有効化
 USE_Z_POSITION_VELOCITY_BIAS_CORRECTION     = True #Z軸位置と速度のバイアス補正の有効化
+USE_DYNAMICS_BIAS_OBSERVER                  = False #motor_setpoint後のforce/torqueモデル誤差をログから推定するか
 ACCELERATION_BIAS_ALPHA                     = 0.05 #加速度バイアスのLPF係数
 VELOCITY_DELTA_BIAS_ALPHA                   = 0.10 #速度差バイアスのLPF係数
 Z_POSITION_VELOCITY_BIAS_ALPHA              = 0.05 #Z軸位置と速度のバイアス補正のLPF係数
 Z_POSITION_VELOCITY_BIAS_LIMIT              = 0.5 #Z軸位置と速度のバイアス補正の制限
+DYNAMICS_FORCE_BIAS_ALPHA                   = 0.08 #force_bias observerのLPF係数
+DYNAMICS_TORQUE_BIAS_ALPHA                  = 0.08 #torque_bias observerのLPF係数
 ACCELERATION_BIAS_TREND_LOOKBACK_STEPS      = 10 #加速度バイアスの変化傾向の予測に使用する過去ステップ数
 ACCELERATION_BIAS_TREND_RATE_LIMIT          = 0.30 #加速度バイアスの変化率の制限
 ACCELERATION_BIAS_LIMIT                     = np.array([3.0, 3.0, 2.0], dtype=float)
 ACCELERATION_BIAS_DEADBAND                  = np.array([0.02, 0.02, 0.01], dtype=float)
+DYNAMICS_FORCE_BIAS_LIMIT                   = np.array([8.0, 8.0, 8.0], dtype=float)
+DYNAMICS_TORQUE_BIAS_LIMIT                  = np.array([0.8, 0.8, 0.25], dtype=float)
+DYNAMICS_FORCE_BIAS_DEADBAND                = np.array([0.04, 0.04, 0.02], dtype=float)
+DYNAMICS_TORQUE_BIAS_DEADBAND               = np.array([0.02, 0.02, 0.01], dtype=float)
 VELOCITY_DELTA_BIAS_AXES                    = np.array([True, True, True], dtype=bool) #速度差からのバイアス推定を有効にする軸
 TRANSLATION_BIAS_AXES                       = np.array([True, True, True], dtype=bool) #推定した並進バイアスを実際の加速度計算へ入れる軸
+DYNAMICS_FORCE_BIAS_AXES                    = np.array([True, True, True], dtype=bool)
+DYNAMICS_TORQUE_BIAS_AXES                   = np.array([True, True, True], dtype=bool)
+LINEAR_VELOCITY_DAMPING                     = np.zeros(3, dtype=float) #NED速度に比例する減衰[1/s]
+ANGULAR_VELOCITY_DAMPING                    = np.zeros(3, dtype=float) #body角速度に比例する減衰[Nm/(rad/s)]
+BODY_TORQUE_SCALE                           = np.ones(3, dtype=float) #motor差分から出る実効トルク倍率
 TAKEOFF_STATE_DISARMED                      = 1
 TAKEOFF_STATE_SPOOLUP                       = 2
 TAKEOFF_STATE_READY_FOR_TAKEOFF             = 3
@@ -169,7 +192,7 @@ else:
     MPC_Z_VEL_MAX_UP = 10.8 / 3.6
     MPC_Z_VEL_MAX_DOWN = 5.4 / 3.6
     MPC_TKO_RAMP_T = 3.0
-    MPC_THR_HOVER = -0.65
+    MPC_THR_HOVER = 0.46 #実機ログで最も合うため固定
     MPC_THR_MIN = 0.12
     MPC_THR_MAX = 1.00
     MPC_THR_XY_MARGIN = 0.30
@@ -237,10 +260,10 @@ PX4_ACTUATOR_MIN            = np.zeros(4, dtype=float)
 PX4_ACTUATOR_MAX            = np.ones(4, dtype=float)
 # thrust coefficient
 MOTOR_THRUST_CONSTANT_SDF   = 1.09e-5
-MOTOR_THRUST_SCALE          = 0.9429863114169338
+MOTOR_THRUST_SCALE          = 0.94266407904946
 MOTOR_THRUST_CONSTANT       = MOTOR_THRUST_CONSTANT_SDF * MOTOR_THRUST_SCALE
 # torque coefficient
-MOMENT_CONSTANT             = 5.0e-9
+MOMENT_CONSTANT             = 8.0e-8
 
 STATE_NAMES = [
     "e0", "e1", "e2", "e3",
@@ -383,8 +406,44 @@ def preprocess_log(df, step_dt):
     df = (
         df.drop_duplicates("_sample_index", keep="last")
           .sort_values("_sample_index")
-          .reset_index(drop=True)
     )
+    full_sample_index = np.arange(
+        int(df["_sample_index"].min()),
+        int(df["_sample_index"].max()) + 1,
+        dtype=np.int64,
+    )
+    df = df.set_index("_sample_index").reindex(full_sample_index)
+    df.index.name = "_sample_index"
+
+    discrete_cols = [
+        "_segment_id",
+        "phase",
+        "event",
+        "takeoff_state",
+        "landed",
+        "ground_contact",
+        "maybe_landed",
+        "hover_thrust_valid",
+    ]
+    for col in discrete_cols:
+        if col in df.columns:
+            df[col] = df[col].ffill().bfill()
+
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    interpolate_cols = [col for col in numeric_cols if col not in discrete_cols]
+    if interpolate_cols:
+        df[interpolate_cols] = (
+            df[interpolate_cols]
+            .interpolate(method="linear", limit_direction="both")
+            .ffill()
+            .bfill()
+        )
+    object_cols = [col for col in df.columns if col not in numeric_cols]
+    if object_cols:
+        df[object_cols] = df[object_cols].ffill().bfill()
+    if "_segment_id" in df.columns:
+        df["_segment_id"] = np.rint(df["_segment_id"].to_numpy(float)).astype(np.int64)
+    df = df.reset_index()
 
     # 5. 時刻を 0, dt, 2dt... にそろえる
     df["control_time_s"] = df["_sample_index"].to_numpy(float) * step_dt
@@ -527,13 +586,13 @@ def make_position_setpoint_from_row(row, horizon_step=None, use_local_sp=False):
 def actuator_motor_from_row(row):
     input_cols = [f"actuator_motor_input_{i}" for i in range(4)]
     raw_cols = [f"actuator_motor_{i}" for i in range(4)]
-    cols = input_cols if all(col in row.index for col in input_cols) else raw_cols
-    if not all(col in row.index for col in cols):
-        return None
-    actuator = row[cols].to_numpy(float)
-    if not np.all(np.isfinite(actuator)):
-        return None
-    return np.clip(actuator, 0.0, 1.0)
+    for cols in (input_cols, raw_cols):
+        if not all(col in row.index for col in cols):
+            continue
+        actuator = row[cols].to_numpy(float)
+        if np.all(np.isfinite(actuator)):
+            return np.clip(actuator, 0.0, 1.0)
+    return None
 
 def motor_speed_from_setpoint(motor_setpoint, step_dt, prev_motor_speed=None):
     motor_setpoint = np.clip(np.asarray(motor_setpoint, dtype=float)[:4], 0.0, 1.0)
@@ -588,6 +647,7 @@ def motor_speed_to_force_torque(motor_speed):
         torque_body += np.cross(pos, force_vec)
         # ロータ反トルク
         torque_body[2] += yaw_sign * MOMENT_CONSTANT * motor_speed[motor_idx] ** 2
+    torque_body *= BODY_TORQUE_SCALE
     return rotor_forces, force_body, torque_body
 
 # roll, pitch, yaw, thrust_z の制御入力から4つのモータ指令を計算する
@@ -750,12 +810,22 @@ def dynamics_step(state, input_data, dt, prev_motor_speed=None):
             prev_motor_speed=prev_motor_speed,
         )
         rotor_forces, force_body, torque_body = motor_speed_to_force_torque(motor_speed)
+        force_body_raw = force_body.copy()
         torque_body_raw = torque_body.copy()
+        force_bias = np.asarray(
+            input_data.get("force_bias", np.zeros(3, dtype=float)),
+            dtype=float,
+        )
         bias_torque = np.asarray(
             input_data.get("bias_torque", np.zeros(3, dtype=float)),
             dtype=float,
         )
-        torque_body = torque_body_raw - bias_torque
+        torque_bias = np.asarray(
+            input_data.get("torque_bias", np.zeros(3, dtype=float)),
+            dtype=float,
+        )
+        force_body = force_body_raw + force_bias
+        torque_body = torque_body_raw - bias_torque + torque_bias
         thrust_acc_ned = (
             quat_to_rotmat(q) @ force_body / DRONE_MASS
             + np.array([0.0, 0.0, A_OF_GRAVITY], dtype=float)
@@ -765,11 +835,13 @@ def dynamics_step(state, input_data, dt, prev_motor_speed=None):
             dtype=float,
         ).copy()
         translation_bias[~TRANSLATION_BIAS_AXES] = 0.0
-        acc_ned = thrust_acc_ned + translation_bias
+        linear_damping_acc = -LINEAR_VELOCITY_DAMPING * vel
+        acc_ned = thrust_acc_ned + translation_bias + linear_damping_acc
         inertia_omega = DRONE_INERTIA @ omega
+        angular_damping_torque = ANGULAR_VELOCITY_DAMPING * omega
         omega_dot = np.linalg.solve(
             DRONE_INERTIA,
-            torque_body - np.cross(omega, inertia_omega),
+            torque_body - angular_damping_torque - np.cross(omega, inertia_omega),
         )
         vel_next = vel + acc_ned * dt
         pos_next = pos + vel_next * dt
@@ -779,16 +851,33 @@ def dynamics_step(state, input_data, dt, prev_motor_speed=None):
             "motor_speed": motor_speed,
             "rotor_forces": rotor_forces,
             "force_body": force_body,
+            "force_body_raw": force_body_raw,
+            "force_bias": force_bias,
             "torque_body": torque_body,
             "torque_body_raw": torque_body_raw,
             "bias_torque": bias_torque,
+            "torque_bias": torque_bias,
             "thrust_acc": thrust_acc_ned,
             "acceleration_bias": translation_bias,
+            "linear_damping_acc": linear_damping_acc,
+            "angular_damping_torque": angular_damping_torque,
             "acc_used": acc_ned,
         })
     elif kind == "force_torque":
         force_body = np.asarray(input_data["force_body"], dtype=float)
         torque_body = np.asarray(input_data["torque_body"], dtype=float)
+        force_body_raw = force_body.copy()
+        torque_body_raw = torque_body.copy()
+        force_bias = np.asarray(
+            input_data.get("force_bias", np.zeros(3, dtype=float)),
+            dtype=float,
+        )
+        torque_bias = np.asarray(
+            input_data.get("torque_bias", np.zeros(3, dtype=float)),
+            dtype=float,
+        )
+        force_body = force_body_raw + force_bias
+        torque_body = torque_body_raw + torque_bias
         thrust_acc_ned = (
             quat_to_rotmat(q) @ force_body / DRONE_MASS
             + np.array([0.0, 0.0, A_OF_GRAVITY], dtype=float)
@@ -798,11 +887,13 @@ def dynamics_step(state, input_data, dt, prev_motor_speed=None):
             dtype=float,
         ).copy()
         translation_bias[~TRANSLATION_BIAS_AXES] = 0.0
-        acc_ned = thrust_acc_ned + translation_bias
+        linear_damping_acc = -LINEAR_VELOCITY_DAMPING * vel
+        acc_ned = thrust_acc_ned + translation_bias + linear_damping_acc
         inertia_omega = DRONE_INERTIA @ omega
+        angular_damping_torque = ANGULAR_VELOCITY_DAMPING * omega
         omega_dot = np.linalg.solve(
             DRONE_INERTIA,
-            torque_body - np.cross(omega, inertia_omega),
+            torque_body - angular_damping_torque - np.cross(omega, inertia_omega),
         )
         vel_next = vel + acc_ned * dt
         pos_next = pos + vel_next * dt
@@ -810,9 +901,15 @@ def dynamics_step(state, input_data, dt, prev_motor_speed=None):
         q_next = integrate_quat(q, omega_next, dt)
         debug.update({
             "force_body": force_body,
+            "force_body_raw": force_body_raw,
+            "force_bias": force_bias,
             "torque_body": torque_body,
+            "torque_body_raw": torque_body_raw,
+            "torque_bias": torque_bias,
             "thrust_acc": thrust_acc_ned,
             "acceleration_bias": translation_bias,
+            "linear_damping_acc": linear_damping_acc,
+            "angular_damping_torque": angular_damping_torque,
             "acc_used": acc_ned,
         })
     else:
@@ -828,23 +925,135 @@ def dynamics_step(state, input_data, dt, prev_motor_speed=None):
     })
     return next_state, debug
 
+
+def log_vector_from_row(row, names):
+    if not all(name in row.index for name in names):
+        return None
+    values = row[list(names)].to_numpy(float)
+    if not np.all(np.isfinite(values)):
+        return None
+    return values
+
+
+def update_dynamics_bias_observer(context, row, next_row, state, debug, dt):
+    if not USE_DYNAMICS_BIAS_OBSERVER or next_row is None or dt <= 0.0:
+        return {}
+    if "force_bias" not in context:
+        context["force_bias"] = np.zeros(3, dtype=float)
+    if "torque_bias" not in context:
+        context["torque_bias"] = np.zeros(3, dtype=float)
+
+    observer_debug = {}
+    current_vel = log_vector_from_row(row, ("vel_x", "vel_y", "vel_z"))
+    next_vel = log_vector_from_row(next_row, ("vel_x", "vel_y", "vel_z"))
+    model_acc = debug.get("acc_used")
+    if current_vel is not None and next_vel is not None and model_acc is not None:
+        model_acc = np.asarray(model_acc, dtype=float)
+        if np.all(np.isfinite(model_acc)):
+            logged_acc = (next_vel - current_vel) / dt
+            acc_residual = logged_acc - model_acc
+            acc_residual[np.abs(acc_residual) < DYNAMICS_FORCE_BIAS_DEADBAND] = 0.0
+            force_correction = quat_to_rotmat(state[0:4]).T @ (DRONE_MASS * acc_residual)
+            force_correction[~DYNAMICS_FORCE_BIAS_AXES] = 0.0
+            context["force_bias"] += DYNAMICS_FORCE_BIAS_ALPHA * force_correction
+            context["force_bias"] = np.clip(
+                context["force_bias"],
+                -DYNAMICS_FORCE_BIAS_LIMIT,
+                DYNAMICS_FORCE_BIAS_LIMIT,
+            )
+            observer_debug.update({
+                "logged_acc": logged_acc,
+                "force_bias_residual_acc": acc_residual,
+                "force_bias_correction": force_correction,
+                "force_bias_observed": context["force_bias"].copy(),
+            })
+
+    current_omega = log_vector_from_row(
+        row,
+        ("angular_vel_x", "angular_vel_y", "angular_vel_z"),
+    )
+    next_omega = log_vector_from_row(
+        next_row,
+        ("angular_vel_x", "angular_vel_y", "angular_vel_z"),
+    )
+    model_omega_dot = debug.get("omega_dot")
+    if (
+        current_omega is not None
+        and next_omega is not None
+        and model_omega_dot is not None
+    ):
+        model_omega_dot = np.asarray(model_omega_dot, dtype=float)
+        if np.all(np.isfinite(model_omega_dot)):
+            logged_omega_dot = (next_omega - current_omega) / dt
+            omega_dot_residual = logged_omega_dot - model_omega_dot
+            omega_dot_residual[np.abs(omega_dot_residual) < DYNAMICS_TORQUE_BIAS_DEADBAND] = 0.0
+            torque_correction = DRONE_INERTIA @ omega_dot_residual
+            torque_correction[~DYNAMICS_TORQUE_BIAS_AXES] = 0.0
+            context["torque_bias"] += DYNAMICS_TORQUE_BIAS_ALPHA * torque_correction
+            context["torque_bias"] = np.clip(
+                context["torque_bias"],
+                -DYNAMICS_TORQUE_BIAS_LIMIT,
+                DYNAMICS_TORQUE_BIAS_LIMIT,
+            )
+            observer_debug.update({
+                "logged_omega_dot": logged_omega_dot,
+                "torque_bias_residual_omega_dot": omega_dot_residual,
+                "torque_bias_correction": torque_correction,
+                "torque_bias_observed": context["torque_bias"].copy(),
+            })
+    return observer_debug
+
+
+def next_row_for_observer(df, row_idx):
+    next_idx = row_idx + 1
+    if next_idx >= len(df):
+        return None
+    if (
+        "_segment_id" in df.columns
+        and df.loc[next_idx, "_segment_id"] != df.loc[row_idx, "_segment_id"]
+    ):
+        return None
+    return df.loc[next_idx]
+
 def make_input_from_row(row, state, mode, context, dt):
     if mode == MODE_ACTUATOR_LOG:
-        return make_input_from_actuator(row), {}, context
+        return make_input_from_logged_actuator(row, state, context, dt)
     if mode == MODE_ACTUAL_STATE:
         return make_input_from_actual_state(row), {}, context
     if mode == MODE_MODEL_INPUT:
         return make_input_from_setpoint(row, state, context, dt)
     raise ValueError(f"unknown mode: {mode}")
 
-def make_input_from_actuator(row):
+def make_input_from_logged_actuator(row, state, context, dt, horizon_step=None, use_log_feedback=True):
     actuator = actuator_motor_from_row(row)
     if actuator is None:
         raise ValueError("actuator_motor input is missing or invalid")
-    return {
+    input_data, input_debug, context = make_input_from_setpoint(
+        row,
+        state,
+        context,
+        dt,
+        horizon_step=horizon_step,
+        use_log_feedback=use_log_feedback,
+    )
+    calculated_actuator = np.asarray(
+        input_data.get("actuator", np.zeros(4, dtype=float)),
+        dtype=float,
+    ).copy()
+    input_debug["calculated_motor_setpoint_used"] = np.asarray(
+        calculated_actuator,
+        dtype=float,
+    )
+    input_data = {
         "kind": "actuator",
         "actuator": actuator,
+        "bias_torque": input_data.get("bias_torque", np.zeros(3, dtype=float)),
+        "acceleration_bias": input_data.get("acceleration_bias", np.zeros(3, dtype=float)),
+        "force_bias": input_data.get("force_bias", np.zeros(3, dtype=float)),
+        "torque_bias": input_data.get("torque_bias", np.zeros(3, dtype=float)),
     }
+    input_debug["motor_setpoint_used"] = actuator.copy()
+    return input_data, input_debug, context
 
 def make_input_from_actual_state(row):
     return {
@@ -860,13 +1069,23 @@ def make_input_from_actual_state(row):
             row["angular_vel_z"],
         ], dtype=float),
     }
-def make_input_from_setpoint(row, state, context, dt):
+
+
+def merge_future_target_row(base_row, target_row):
+    input_row = base_row.copy()
+    for col in FUTURE_TARGET_COLUMNS:
+        if col in target_row.index:
+            input_row[col] = target_row[col]
+    return input_row
+
+
+def make_input_from_setpoint(row, state, context, dt, horizon_step=None, use_log_feedback=True):
     state = np.asarray(state, dtype=float).copy()
     q = normalize(state[0:4])
     if np.linalg.norm(q) < 1.0e-8:
         q = np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
     state[0:4] = q
-    pos_sp, yaw_sp = make_position_setpoint_from_row(row)
+    pos_sp, yaw_sp = make_position_setpoint_from_row(row, horizon_step=horizon_step)
     vel = state[[STATE_INDEX["vx"], STATE_INDEX["vy"], STATE_INDEX["vz"]]].copy()
     omega = state[[STATE_INDEX["wx"], STATE_INDEX["wy"], STATE_INDEX["wz"]]].copy()
     if "prev_vel" not in context:
@@ -902,6 +1121,10 @@ def make_input_from_setpoint(row, state, context, dt):
         context["last_hover_thrust_log"] = np.nan
     if "acceleration_bias" not in context:
         context["acceleration_bias"] = np.zeros(3, dtype=float)
+    if "force_bias" not in context:
+        context["force_bias"] = np.zeros(3, dtype=float)
+    if "torque_bias" not in context:
+        context["torque_bias"] = np.zeros(3, dtype=float)
     if "prev_model_acc" not in context:
         context["prev_model_acc"] = np.full(3, np.nan, dtype=float)
     if "prev_log_vel" not in context:
@@ -912,7 +1135,8 @@ def make_input_from_setpoint(row, state, context, dt):
         ], dtype=float)
     if "next_rate_int_sync_time" not in context:
         if (
-            RATE_INT_SYNC_PERIOD
+            use_log_feedback
+            and RATE_INT_SYNC_PERIOD
             and RATE_INT_SYNC_PERIOD > 0.0
             and "control_time_s" in row.index
             and np.isfinite(row["control_time_s"])
@@ -923,7 +1147,8 @@ def make_input_from_setpoint(row, state, context, dt):
         else:
             context["next_rate_int_sync_time"] = np.inf
     if (
-        RATE_INT_SYNC_PERIOD
+        use_log_feedback
+        and RATE_INT_SYNC_PERIOD
         and RATE_INT_SYNC_PERIOD > 0.0
         and "control_time_s" in row.index
         and np.isfinite(row["control_time_s"])
@@ -936,7 +1161,7 @@ def make_input_from_setpoint(row, state, context, dt):
             float(row["control_time_s"]) + RATE_INT_SYNC_PERIOD
         )
 
-    if "hover_thrust" in row.index and "hover_thrust_valid" in row.index:
+    if use_log_feedback and "hover_thrust" in row.index and "hover_thrust_valid" in row.index:
         hover_thrust_new = float(row["hover_thrust"])
         hover_thrust_valid = bool(
             np.isfinite(row["hover_thrust_valid"])
@@ -984,7 +1209,8 @@ def make_input_from_setpoint(row, state, context, dt):
     current_log_vel = np.array([row["vel_x"], row["vel_y"], row["vel_z"]], dtype=float)
     acceleration_bias_observed = context["acceleration_bias"].copy()
     if (
-        USE_ACCELERATION_BIAS_OBSERVER
+        use_log_feedback
+        and USE_ACCELERATION_BIAS_OBSERVER
         and USE_VELOCITY_DELTA_BIAS_OBSERVER
         and np.any(VELOCITY_DELTA_BIAS_AXES)
         and np.all(np.isfinite(current_log_vel))
@@ -1006,9 +1232,10 @@ def make_input_from_setpoint(row, state, context, dt):
         )
         acceleration_bias_observed = context["acceleration_bias"].copy()
 
-    logged_vel_int = estimate_vel_int_from_logged_setpoint(row, state, context["prev_acc"])
-    if logged_vel_int is not None:
-        context["vel_int"] = logged_vel_int
+    if use_log_feedback:
+        logged_vel_int = estimate_vel_int_from_logged_setpoint(row, state, context["prev_acc"])
+        if logged_vel_int is not None:
+            context["vel_int"] = logged_vel_int
     prev_vel = context["prev_vel"]
     prev_acc = context["prev_acc"]
     vel_int = context["vel_int"]
@@ -1017,9 +1244,12 @@ def make_input_from_setpoint(row, state, context, dt):
     rate_int = context["rate_int"]
     hover_thrust = context["hover_thrust"]
     acceleration_bias = context["acceleration_bias"].copy()
+    force_bias = context["force_bias"].copy()
+    torque_bias = context["torque_bias"].copy()
 
     if no_thrust:
-        context["prev_log_vel"] = current_log_vel.copy()
+        if use_log_feedback:
+            context["prev_log_vel"] = current_log_vel.copy()
         input_data = {"kind": "hold"}
         debug = {
             "pos_sp": pos_sp,
@@ -1036,6 +1266,8 @@ def make_input_from_setpoint(row, state, context, dt):
             "motor_setpoint_used": np.zeros(4, dtype=float),
             "allocator_unallocated": np.zeros(4, dtype=float),
             "acceleration_bias": acceleration_bias,
+            "force_bias": force_bias,
+            "torque_bias": torque_bias,
             "acceleration_bias_observed": acceleration_bias_observed,
             "takeoff_state": np.array([takeoff_state], dtype=float),
             "thrust_min": np.array([thrust_min], dtype=float),
@@ -1266,6 +1498,8 @@ def make_input_from_setpoint(row, state, context, dt):
         "actuator": motor_setpoint_used,
         "bias_torque": bias_torque,
         "acceleration_bias": acceleration_bias,
+        "force_bias": force_bias,
+        "torque_bias": torque_bias,
     }
     debug = {
         "pos_sp": pos_sp,
@@ -1290,6 +1524,8 @@ def make_input_from_setpoint(row, state, context, dt):
         "allocator_unallocated": unallocated,
         "bias_torque": bias_torque,
         "acceleration_bias": acceleration_bias,
+        "force_bias": force_bias,
+        "torque_bias": torque_bias,
         "acceleration_bias_observed": acceleration_bias_observed,
         "takeoff_state": np.array([takeoff_state], dtype=float),
         "thrust_min": np.array([thrust_min], dtype=float),
@@ -1299,13 +1535,21 @@ def make_input_from_setpoint(row, state, context, dt):
         "vel_int": vel_int,
         "vel_int_next": vel_int_next,
     }
-    context["prev_log_vel"] = current_log_vel.copy()
+    if use_log_feedback:
+        context["prev_log_vel"] = current_log_vel.copy()
     return input_data, debug, context
 def warm_prediction_context(df, start_idx, dt, mode=MODE_MODEL_INPUT):
     context = {}
     prev_motor_speed = None
     warm_end = int(np.clip(start_idx, 0, len(df)))
     for row_idx in range(warm_end):
+        if (
+            row_idx > 0
+            and "_segment_id" in df.columns
+            and df.loc[row_idx, "_segment_id"] != df.loc[row_idx - 1, "_segment_id"]
+        ):
+            context = {}
+            prev_motor_speed = None
         row = df.loc[row_idx]
         state = state_from_row(row)
         input_data, input_debug, context = make_input_from_row(row, state, mode, context, dt)
@@ -1316,7 +1560,17 @@ def warm_prediction_context(df, start_idx, dt, mode=MODE_MODEL_INPUT):
             prev_motor_speed=prev_motor_speed,
         )
         debug.update(input_debug)
-        if mode == MODE_MODEL_INPUT and "acc_used" in debug:
+        debug.update(
+            update_dynamics_bias_observer(
+                context,
+                row,
+                next_row_for_observer(df, row_idx),
+                state,
+                debug,
+                dt,
+            )
+        )
+        if "acc_used" in debug:
             context["prev_model_acc"] = np.asarray(debug["acc_used"], dtype=float).copy()
         prev_motor_speed = debug.get("motor_speed", prev_motor_speed)
     return context, prev_motor_speed
@@ -1331,6 +1585,13 @@ def build_prediction_contexts(df, start_indices, dt, mode=MODE_MODEL_INPUT):
     prev_motor_speed = None
     contexts = {}
     for row_idx in range(min(max_start + 1, len(df))):
+        if (
+            row_idx > 0
+            and "_segment_id" in df.columns
+            and df.loc[row_idx, "_segment_id"] != df.loc[row_idx - 1, "_segment_id"]
+        ):
+            context = {}
+            prev_motor_speed = None
         if row_idx in start_set:
             contexts[row_idx] = (
                 copy.deepcopy(context),
@@ -1346,7 +1607,17 @@ def build_prediction_contexts(df, start_indices, dt, mode=MODE_MODEL_INPUT):
             prev_motor_speed=prev_motor_speed,
         )
         debug.update(input_debug)
-        if mode == MODE_MODEL_INPUT and "acc_used" in debug:
+        debug.update(
+            update_dynamics_bias_observer(
+                context,
+                row,
+                next_row_for_observer(df, row_idx),
+                state,
+                debug,
+                dt,
+            )
+        )
+        if "acc_used" in debug:
             context["prev_model_acc"] = np.asarray(debug["acc_used"], dtype=float).copy()
         prev_motor_speed = debug.get("motor_speed", prev_motor_speed)
     return contexts
@@ -1367,12 +1638,49 @@ def rollout(
     prev_motor_speed = initial_prev_motor_speed
     context = copy.deepcopy(initial_context) if initial_context is not None else {}
     debug_list = []
+    start_segment = df.loc[start_idx, "_segment_id"] if "_segment_id" in df.columns else None
+    realtime_input_row = (
+        df.loc[start_idx].copy()
+        if mode in (MODE_MODEL_INPUT, MODE_ACTUATOR_LOG)
+        else None
+    )
     for h in range(horizon):
         row_idx = start_idx + h
         if row_idx >= len(df):
             break
+        if start_segment is not None and df.loc[row_idx, "_segment_id"] != start_segment:
+            break
         row = df.loc[row_idx]
-        input_data, input_debug, context = make_input_from_row(row, state, mode, context, dt)
+        if mode == MODE_MODEL_INPUT:
+            target_input_row = merge_future_target_row(realtime_input_row, row)
+            input_data, input_debug, context = make_input_from_setpoint(
+                target_input_row,
+                state,
+                context,
+                dt,
+                horizon_step=h,
+                use_log_feedback=False,
+            )
+        elif mode == MODE_ACTUATOR_LOG:
+            actuator = actuator_motor_from_row(row)
+            if actuator is None:
+                raise ValueError("actuator_motor input is missing or invalid")
+            input_data, input_debug, context = make_input_from_setpoint(
+                realtime_input_row,
+                state,
+                context,
+                dt,
+                horizon_step=h,
+                use_log_feedback=False,
+            )
+            input_debug["calculated_motor_setpoint_used"] = np.asarray(
+                input_data["actuator"],
+                dtype=float,
+            ).copy()
+            input_data["actuator"] = actuator
+            input_debug["motor_setpoint_used"] = actuator.copy()
+        else:
+            input_data, input_debug, context = make_input_from_row(row, state, mode, context, dt)
         state, debug = dynamics_step(
             state,
             input_data,
@@ -1380,7 +1688,7 @@ def rollout(
             prev_motor_speed=prev_motor_speed,
         )
         debug.update(input_debug)
-        if mode == MODE_MODEL_INPUT and "acc_used" in debug:
+        if "acc_used" in debug:
             context["prev_model_acc"] = np.asarray(debug["acc_used"], dtype=float).copy()
         prev_motor_speed = debug.get("motor_speed", prev_motor_speed)
         pred_states[h + 1] = state.copy()
@@ -1562,7 +1870,7 @@ def plot_state(
             pred_t[pred_mask],
             pred_value[pred_mask],
             color="tab:cyan",
-            linewidth=1.4,
+            linewidth=2.0,
             alpha=0.8,
             label=f"{state_name}_{mode}" if pred_i == 0 else None,
         )
