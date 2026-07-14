@@ -344,6 +344,13 @@ namespace qc_mcmpc
         float pred_target_x = target_state_device.x;
         float pred_target_y = target_state_device.y;
         float pred_target_z = target_state_device.z;
+        int pred_waypoint_index = square_waypoint_index_device;
+        if (pred_waypoint_index < 0) {
+            pred_waypoint_index = 0;
+        } else if (pred_waypoint_index >= _SQUARE_WAYPOINTS) {
+            pred_waypoint_index = _SQUARE_WAYPOINTS - 1;
+        }
+        float pred_waypoint_change_time = square_waypoint_change_time_device;
 
         // 内部で位置/ヨー入力からsetpointを計算し，同定済み離散モデルで状態遷移する
         for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
@@ -879,9 +886,23 @@ namespace qc_mcmpc
                 var_and_z_i_temp[6] = 2.0f*w_plus[0]*(var_and_z_i_temp[0]*var_and_z_i_temp[2]+var_and_z_i_temp[1]*var_and_z_i_temp[3]) + w_plus[2]*(-1.0f+2.0f*var_and_z_i_temp[0]*var_and_z_i_temp[0]+2.0f*var_and_z_i_temp[3]*var_and_z_i_temp[3]) - 2.0f*w_plus[1]*(var_and_z_i_temp[0]*var_and_z_i_temp[1]-var_and_z_i_temp[2]*var_and_z_i_temp[3]);
             }
 #endif
-            // Keep the target fixed over the prediction horizon. The real controller
-            // advances square waypoints only from the measured state, not from each
-            // sampled predicted trajectory.
+            float pred_time = mcmpc_log_device + (static_cast<float>(i) + 1.0f) * control_period_device;
+            float pred_waypoint_dx = pred_target_x - var_and_z_i_temp[7];
+            float pred_waypoint_dy = pred_target_y - var_and_z_i_temp[8];
+            float pred_waypoint_error = sqrtf(
+                pred_waypoint_dx * pred_waypoint_dx +
+                pred_waypoint_dy * pred_waypoint_dy
+            );
+            if ((pred_time - pred_waypoint_change_time) >= _SQUARE_WAYPOINT_HOLD_SEC &&
+                pred_waypoint_error < _SQUARE_WAYPOINT_THRESHOLD &&
+                pred_waypoint_index + 1 < _SQUARE_WAYPOINTS) {
+                pred_waypoint_index++;
+                pred_waypoint_change_time = pred_time;
+                pred_target_x = square_waypoints_device[pred_waypoint_index][0];
+                pred_target_y = square_waypoints_device[pred_waypoint_index][1];
+                pred_target_z = square_waypoints_device[pred_waypoint_index][2];
+            }
+
             float vel_ref_cost[3];
             vel_ref_cost[0] = mpc_xy_p * (pred_target_x - var_and_z_i_temp[7]);
             vel_ref_cost[1] = mpc_xy_p * (pred_target_y - var_and_z_i_temp[8]);

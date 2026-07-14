@@ -95,9 +95,6 @@ static float rotate_angle = M_PI/4.0f;
 static constexpr float TAKEOFF_X = 0.0f;
 static constexpr float TAKEOFF_Y = 0.0f;
 static constexpr float TAKEOFF_Z = -1.0f;
-static constexpr float SQUARE_Z = -1.0f;
-static constexpr float SQUARE_WAYPOINT_THRESHOLD = 0.15f;
-static constexpr float SQUARE_WAYPOINT_HOLD_SEC = 0.0f;
 static constexpr int SQUARE_START_WAYPOINT_INDEX = 1;
 
 static uint64_t offboard_setpoint_counter = 0;
@@ -305,7 +302,7 @@ void set_square_waypoint(int index)
     square_waypoint_change_time = mcmpc_log;
     target_host.x = CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][0];
     target_host.y = CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][1];
-    target_host.z = SQUARE_Z;
+    target_host.z = CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][2];
     set_target_yaw(0.0f);
     update_target_state_device();
     cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_index_device, &square_waypoint_index, sizeof(int));
@@ -901,8 +898,8 @@ int main(int argc, char *argv[])
             float dx = target_host.x - quad_sim_base::var_array_to_integrate[7];
             float dy = target_host.y - quad_sim_base::var_array_to_integrate[8];
             float waypoint_error = std::sqrt(dx * dx + dy * dy);
-            if ((mcmpc_log - square_waypoint_change_time) >= SQUARE_WAYPOINT_HOLD_SEC &&
-                waypoint_error < SQUARE_WAYPOINT_THRESHOLD &&
+            if ((mcmpc_log - square_waypoint_change_time) >= _SQUARE_WAYPOINT_HOLD_SEC &&
+                waypoint_error < _SQUARE_WAYPOINT_THRESHOLD &&
                 square_waypoint_index + 1 < _SQUARE_WAYPOINTS) {
                 set_square_waypoint(square_waypoint_index + 1);
             }

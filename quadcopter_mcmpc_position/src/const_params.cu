@@ -361,12 +361,14 @@ const int CONST_PARAM_FLOAT::TAKEOFF_STATE_FLIGHT       = CONST_PARAM::TAKEOFF_S
 
 const float CONST_PARAM_FLOAT::square_waypoints[_SQUARE_WAYPOINTS][3] = {
     {0.0f, 0.0f, -1.0f},
-    {1.0f, 0.0f, -1.0f},
-    {1.0f, 1.0f, -1.0f},
-    {-1.0f, 1.0f, -1.0f},
-    {-1.0f, -1.0f, -1.0f},
-    {1.0f, -1.0f, -1.0f},
-    {1.0f, 0.0f, -1.0f}
+    {0.7f, 0.0f, -1.0f},
+    {0.7f, 0.7f, -1.0f},
+    {-0.7f, 0.7f, -1.0f},
+    {-0.7f, -0.7f, -1.0f},
+    {0.7f, -0.7f, -1.0f},
+    {0.7f, 0.0f, -1.0f},
+    {0.0f, 0.0f, -1.0f},
+    {0.0f, 0.0f, 0.0f}
 };
 
 // const float CONST_PARAM_FLOAT::square_waypoints[_SQUARE_WAYPOINTS][3] = {
