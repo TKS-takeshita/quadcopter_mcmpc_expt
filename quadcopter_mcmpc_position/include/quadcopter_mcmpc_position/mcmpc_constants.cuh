@@ -124,7 +124,8 @@ namespace qc_mcmpc{
     extern __constant__ float mcmpc_log_device;
     extern __constant__ float square_waypoints_device[_SQUARE_WAYPOINTS][3];
     extern __constant__ int takeoff_state_device;
-    extern __constant__ float takeoff_tilt_limit_device;
+    extern __constant__ float takeoff_tilt_limit_sin_device;
+    extern __constant__ float takeoff_tilt_limit_cos_device;
     extern __constant__ int landed_device;
     extern __constant__ int ground_contact_device;
     extern __constant__ int maybe_landed_device;
@@ -160,7 +161,6 @@ namespace qc_mcmpc{
 
     extern __constant__ int   takeoff_state_rampup_device;
     extern __constant__ int   takeoff_state_flight_device;
-    extern __constant__ float mpc_tilt_max_device;
 
     extern __constant__ int motor_command_delay_steps;
 

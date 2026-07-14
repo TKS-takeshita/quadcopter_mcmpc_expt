@@ -366,10 +366,6 @@ namespace qc_mcmpc
             bool flying_but_ground_contact = flying && (ground_contact_device || maybe_landed_device);
             bool no_thrust = (takeoff_state_device < takeoff_state_rampup_device) || flying_but_ground_contact;
             float thrust_min = flying ? mpc_thr_min : 0.0f;
-            float tilt_limit = takeoff_tilt_limit_device;
-            if (!isfinite(tilt_limit) || tilt_limit <= 0.0f) {
-                tilt_limit = mpc_tilt_max_device;
-            }
             float hover_thrust = mpc_thr_hover;
             if (!isfinite(hover_thrust) || hover_thrust < 1.0e-6f) {
                 hover_thrust = 0.60f;
@@ -421,9 +417,7 @@ namespace qc_mcmpc
             body_z[1] *= bz_norm_inv;
             body_z[2] *= bz_norm_inv;
 
-            float dot_z = fminf(fmaxf(body_z[2], -1.0f), 1.0f);
-            float tilt_angle = acosf(dot_z);
-            if (tilt_angle > tilt_limit) {
+            if (body_z[2] < takeoff_tilt_limit_cos_device) {
                 float rejection[3];
                 rejection[0] = body_z[0];
                 rejection[1] = body_z[1];
@@ -436,9 +430,9 @@ namespace qc_mcmpc
                 }
                 rejection[0] /= rejection_norm;
                 rejection[1] /= rejection_norm;
-                body_z[0] = sinf(tilt_limit) * rejection[0];
-                body_z[1] = sinf(tilt_limit) * rejection[1];
-                body_z[2] = cosf(tilt_limit);
+                body_z[0] = takeoff_tilt_limit_sin_device * rejection[0];
+                body_z[1] = takeoff_tilt_limit_sin_device * rejection[1];
+                body_z[2] = takeoff_tilt_limit_cos_device;
             }
 
             if (no_thrust) {
@@ -899,11 +893,13 @@ namespace qc_mcmpc
             vel_ref_cost[1] = mpc_xy_p * (pred_target_y - var_and_z_i_temp[8]);
             vel_ref_cost[2] = mpc_z_p  * (pred_target_z - var_and_z_i_temp[9]);
 
-            float vel_ref_cost_xy_norm = sqrtf(
+            float vel_ref_cost_xy_norm_sq =
                 vel_ref_cost[0] * vel_ref_cost[0] +
-                vel_ref_cost[1] * vel_ref_cost[1]
-            );
-            if (vel_ref_cost_xy_norm > mpc_xy_vel_max && vel_ref_cost_xy_norm > 1.0e-6f) {
+                vel_ref_cost[1] * vel_ref_cost[1];
+            float mpc_xy_vel_max_sq = mpc_xy_vel_max * mpc_xy_vel_max;
+            if (vel_ref_cost_xy_norm_sq > mpc_xy_vel_max_sq &&
+                vel_ref_cost_xy_norm_sq > 1.0e-12f) {
+                float vel_ref_cost_xy_norm = sqrtf(vel_ref_cost_xy_norm_sq);
                 float vel_ref_cost_scale = mpc_xy_vel_max / vel_ref_cost_xy_norm;
                 vel_ref_cost[0] *= vel_ref_cost_scale;
                 vel_ref_cost[1] *= vel_ref_cost_scale;

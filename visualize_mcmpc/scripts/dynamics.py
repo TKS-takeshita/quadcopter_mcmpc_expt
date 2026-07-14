@@ -1326,8 +1326,9 @@ def make_input_from_setpoint(row, state, context, dt, horizon_step=None, use_log
         MPC_XY_P * (pos_sp[1] - state[STATE_INDEX["y"]]),
         MPC_Z_P * (pos_sp[2] - state[STATE_INDEX["z"]]),
     ], dtype=float)
-    vel_xy_norm = np.linalg.norm(vel_sp[:2])
-    if vel_xy_norm > MPC_XY_VEL_MAX and vel_xy_norm > 1.0e-8:
+    vel_xy_norm_sq = vel_sp[0] * vel_sp[0] + vel_sp[1] * vel_sp[1]
+    if vel_xy_norm_sq > MPC_XY_VEL_MAX * MPC_XY_VEL_MAX and vel_xy_norm_sq > 1.0e-16:
+        vel_xy_norm = np.sqrt(vel_xy_norm_sq)
         vel_sp[:2] = vel_sp[:2] / vel_xy_norm * MPC_XY_VEL_MAX
     vel_sp[2] = np.clip(vel_sp[2], -z_vel_max_up, MPC_Z_VEL_MAX_DOWN)
     vel_error = vel_sp - vel
@@ -1340,18 +1341,19 @@ def make_input_from_setpoint(row, state, context, dt, horizon_step=None, use_log
     body_z = normalize(np.array([-acc_sp[0], -acc_sp[1], z_specific_force], dtype=float))
     if np.linalg.norm(body_z) < 1.0e-8:
         body_z = np.array([0.0, 0.0, 1.0], dtype=float)
-    tilt_angle = np.arccos(np.clip(body_z[2], -1.0, 1.0))
-    if tilt_angle > tilt_limit:
+    tilt_limit_cos = np.cos(tilt_limit)
+    if body_z[2] < tilt_limit_cos:
         rejection = np.array([body_z[0], body_z[1], 0.0], dtype=float)
         rejection_norm = np.linalg.norm(rejection)
         if rejection_norm < 1.0e-8:
             rejection = np.array([1.0, 0.0, 0.0], dtype=float)
             rejection_norm = 1.0
         rejection = rejection / rejection_norm
+        tilt_limit_sin = np.sin(tilt_limit)
         body_z = np.array([
-            np.sin(tilt_limit) * rejection[0],
-            np.sin(tilt_limit) * rejection[1],
-            np.cos(tilt_limit),
+            tilt_limit_sin * rejection[0],
+            tilt_limit_sin * rejection[1],
+            tilt_limit_cos,
         ], dtype=float)
     thrust_ned_z = acc_sp[2] * (hover_thrust / A_OF_GRAVITY) - hover_thrust
     cos_ned_body = body_z[2] if abs(body_z[2]) >= 1.0e-6 else 1.0e-6

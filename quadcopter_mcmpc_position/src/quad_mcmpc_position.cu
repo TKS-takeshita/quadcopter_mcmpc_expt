@@ -733,13 +733,19 @@ int main(int argc, char *argv[])
             float takeoff_tilt_limit_for_model = has_takeoff_status
                 ? latest_takeoff_status.tilt_limit
                 : CONST_PARAM_FLOAT::MPC_TILT_MAX;
+            if (!std::isfinite(takeoff_tilt_limit_for_model) || takeoff_tilt_limit_for_model <= 0.0f) {
+                takeoff_tilt_limit_for_model = CONST_PARAM_FLOAT::MPC_TILT_MAX;
+            }
+            float takeoff_tilt_limit_sin_for_model = std::sin(takeoff_tilt_limit_for_model);
+            float takeoff_tilt_limit_cos_for_model = std::cos(takeoff_tilt_limit_for_model);
             landed_for_model = (has_land_detected && latest_land_detected.landed) ? 1 : 0;
             ground_contact_for_model = (has_land_detected && latest_land_detected.ground_contact) ? 1 : 0;
             maybe_landed_for_model = (has_land_detected && latest_land_detected.maybe_landed) ? 1 : 0;
 
             cudaMemcpyToSymbol(qc_mcmpc::mpc_thr_hover, &hover_thrust_for_model, sizeof(float));
             cudaMemcpyToSymbol(qc_mcmpc::takeoff_state_device, &takeoff_state_for_model, sizeof(int));
-            cudaMemcpyToSymbol(qc_mcmpc::takeoff_tilt_limit_device, &takeoff_tilt_limit_for_model, sizeof(float));
+            cudaMemcpyToSymbol(qc_mcmpc::takeoff_tilt_limit_sin_device, &takeoff_tilt_limit_sin_for_model, sizeof(float));
+            cudaMemcpyToSymbol(qc_mcmpc::takeoff_tilt_limit_cos_device, &takeoff_tilt_limit_cos_for_model, sizeof(float));
             cudaMemcpyToSymbol(qc_mcmpc::landed_device, &landed_for_model, sizeof(int));
             cudaMemcpyToSymbol(qc_mcmpc::ground_contact_device, &ground_contact_for_model, sizeof(int));
             cudaMemcpyToSymbol(qc_mcmpc::maybe_landed_device, &maybe_landed_for_model, sizeof(int));
