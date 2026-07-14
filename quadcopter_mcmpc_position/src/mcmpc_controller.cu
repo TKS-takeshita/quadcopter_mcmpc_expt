@@ -1,5 +1,8 @@
-#include <cmath>
 #include <iostream>
+#include <thrust/sequence.h>
+#include <thrust/sequence.h>
+#include <thrust/copy.h>
+#include <thrust/sort.h>
 
 #include "mpc_simulator.cu"
 
@@ -95,6 +98,7 @@ namespace qc_mcmpc
 
     __constant__ int takeoff_state_rampup_device;
     __constant__ int takeoff_state_flight_device;
+    __constant__ float mpc_tilt_max_device;
 
     target_state_t target_host;
 
@@ -118,27 +122,14 @@ namespace qc_mcmpc
     __constant__ float mcmpc_log_device;
     __constant__ float square_waypoints_device[_SQUARE_WAYPOINTS][3];
     __constant__ int takeoff_state_device;
-    __constant__ float takeoff_tilt_limit_sin_device;
-    __constant__ float takeoff_tilt_limit_cos_device;
+    __constant__ float takeoff_tilt_limit_device;
     __constant__ int landed_device;
     __constant__ int ground_contact_device;
     __constant__ int maybe_landed_device;
 
     __global__ static void init_curand_seed(curandState *state_array, int seed);
 	__global__ static void generate_input_samples_and_calc_costs(curandState *state, input_array* input_array_sample_device, float* cost_vec);
-    __global__ static void select_elite_indices_and_lambda(
-        const float* cost_vec,
-        int* elite_indices,
-        int* selected_flags,
-        float* lambda_out,
-        int n_samples,
-        int n_elite);
-    __global__ static void calc_weighted_average_input_on_device(
-        const input_array* input_samples,
-        const int* elite_indices,
-        const float* lambda_in,
-        input_array* best_input,
-        int n_elite);
+	__global__ static void extract_elite_sample(input_array* src, input_array* dst, int* elite_indices);
 
 	// コスト再計算用関数
 	static void input_constraint_cpu(float& rps_z, float& rps_wx, float& rps_wy, float& rps_ws);
@@ -199,20 +190,18 @@ namespace qc_mcmpc
 		thrust::device_vector<input_array> input_vec_dev_temp(CONST_PARAM::N_OF_SAMPLES);
 		input_array_device_vec = input_vec_dev_temp;
 
+		thrust::device_vector<input_array> input_vec_dev_elite_temp(CONST_PARAM::N_OF_THE_USING_BEST);
+		input_array_device_vec_elite = input_vec_dev_elite_temp;
+
+		thrust::device_vector<int> indices_vec_dev_temp(CONST_PARAM::N_OF_SAMPLES);
+		indices_device_vec = indices_vec_dev_temp;
+
 		thrust::device_vector<float> cost_vec_dev_temp( CONST_PARAM::N_OF_SAMPLES );
 		cost_device_vec_for_sorting = cost_vec_dev_temp;
 
-        thrust::device_vector<int> elite_indices_vec_dev_temp(CONST_PARAM::N_OF_THE_USING_BEST);
-        elite_indices_device_vec = elite_indices_vec_dev_temp;
-
-        thrust::device_vector<int> elite_selected_flags_vec_dev_temp(CONST_PARAM::N_OF_SAMPLES);
-        elite_selected_flags_device_vec = elite_selected_flags_vec_dev_temp;
-
-        thrust::device_vector<float> elite_lambda_vec_dev_temp(1);
-        elite_lambda_device_vec = elite_lambda_vec_dev_temp;
-
-        thrust::device_vector<input_array> best_input_vec_dev_temp(1);
-        best_input_array_device_vec = best_input_vec_dev_temp;
+		// host_vectorを生成
+		thrust::host_vector<input_array> input_vec_host_elite_temp( CONST_PARAM::N_OF_THE_USING_BEST );
+		input_array_host_vec_elite = input_vec_host_elite_temp;
 
 		//  __constant__ メモリに定数をコピー
 		cudaMemcpyToSymbol(target_state_device, &target_host, sizeof(target_state_t));
@@ -304,19 +293,18 @@ namespace qc_mcmpc
 
         cudaMemcpyToSymbol(takeoff_state_rampup_device, &CONST_PARAM_FLOAT::TAKEOFF_STATE_RAMPUP, sizeof(int));
         cudaMemcpyToSymbol(takeoff_state_flight_device, &CONST_PARAM_FLOAT::TAKEOFF_STATE_FLIGHT, sizeof(int));
+        cudaMemcpyToSymbol(mpc_tilt_max_device, &CONST_PARAM_FLOAT::MPC_TILT_MAX, sizeof(float));
+
         cudaMemcpyToSymbol( square_waypoints_device,    CONST_PARAM_FLOAT::square_waypoints,            sizeof(CONST_PARAM_FLOAT::square_waypoints) );
 
         {
             int takeoff_state_init = CONST_PARAM_FLOAT::TAKEOFF_STATE_FLIGHT;
             float takeoff_tilt_limit_init = CONST_PARAM_FLOAT::MPC_TILT_MAX;
-            float takeoff_tilt_limit_sin_init = std::sin(takeoff_tilt_limit_init);
-            float takeoff_tilt_limit_cos_init = std::cos(takeoff_tilt_limit_init);
             int landed_init = 0;
             int ground_contact_init = 0;
             int maybe_landed_init = 0;
             cudaMemcpyToSymbol(takeoff_state_device, &takeoff_state_init, sizeof(int));
-            cudaMemcpyToSymbol(takeoff_tilt_limit_sin_device, &takeoff_tilt_limit_sin_init, sizeof(float));
-            cudaMemcpyToSymbol(takeoff_tilt_limit_cos_device, &takeoff_tilt_limit_cos_init, sizeof(float));
+            cudaMemcpyToSymbol(takeoff_tilt_limit_device, &takeoff_tilt_limit_init, sizeof(float));
             cudaMemcpyToSymbol(landed_device, &landed_init, sizeof(int));
             cudaMemcpyToSymbol(ground_contact_device, &ground_contact_init, sizeof(int));
             cudaMemcpyToSymbol(maybe_landed_device, &maybe_landed_init, sizeof(int));
@@ -357,125 +345,17 @@ namespace qc_mcmpc
 		cost_vec[id] = input_array_sample_device[id].cost;
 	}
 
-    __global__ static void select_elite_indices_and_lambda(
-        const float* cost_vec,
-        int* elite_indices,
-        int* selected_flags,
-        float* lambda_out,
-        int n_samples,
-        int n_elite)
-    {
-        __shared__ float block_best_cost[_DEVICE_CONST_THREAD_PER_BLOCK];
-        __shared__ int block_best_index[_DEVICE_CONST_THREAD_PER_BLOCK];
-        __shared__ float lambda_sum;
+    // エリートサンプルだけの入力列 devivce_vectorをGPUで生成 (ホストへの大量転送, ホストからのランダムアクセスを防ぐ)
+	__global__ static void extract_elite_sample(input_array* src, input_array* dst, int* elite_indices){
+		int id = blockDim.x * blockIdx.x + threadIdx.x;//blockDim.x = 1, threadIdx.x = 0
 
-        int tid = threadIdx.x;
-        for (int sample = tid; sample < n_samples; sample += blockDim.x) {
-            selected_flags[sample] = 0;
-        }
-        if (tid == 0) {
-            lambda_sum = 0.0f;
-        }
-        __syncthreads();
-
-        for (int elite = 0; elite < n_elite; elite++) {
-            float local_best_cost = 1.0e30f;
-            int local_best_index = -1;
-            for (int sample = tid; sample < n_samples; sample += blockDim.x) {
-                if (selected_flags[sample] != 0) {
-                    continue;
-                }
-                float sample_cost = cost_vec[sample];
-                if (sample_cost < local_best_cost ||
-                    (sample_cost == local_best_cost && sample < local_best_index)) {
-                    local_best_cost = sample_cost;
-                    local_best_index = sample;
-                }
-            }
-            block_best_cost[tid] = local_best_cost;
-            block_best_index[tid] = local_best_index;
-            __syncthreads();
-
-            for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-                if (tid < stride) {
-                    float other_cost = block_best_cost[tid + stride];
-                    int other_index = block_best_index[tid + stride];
-                    if (other_cost < block_best_cost[tid] ||
-                        (other_cost == block_best_cost[tid] &&
-                         other_index >= 0 &&
-                         (block_best_index[tid] < 0 || other_index < block_best_index[tid]))) {
-                        block_best_cost[tid] = other_cost;
-                        block_best_index[tid] = other_index;
-                    }
-                }
-                __syncthreads();
-            }
-
-            if (tid == 0) {
-                int best_index = block_best_index[0];
-                if (best_index >= 0) {
-                    elite_indices[elite] = best_index;
-                    selected_flags[best_index] = 1;
-                    lambda_sum += block_best_cost[0];
-                }
-            }
-            __syncthreads();
-        }
-
-        if (tid == 0) {
-            lambda_out[0] = lambda_sum / (float)n_elite;
-        }
-    }
-
-    __global__ static void calc_weighted_average_input_on_device(
-        const input_array* input_samples,
-        const int* elite_indices,
-        const float* lambda_in,
-        input_array* best_input,
-        int n_elite)
-    {
-        __shared__ float elite_weights[_DEVICE_CONST_THREAD_PER_BLOCK];
-        __shared__ float sum_of_weight_shared[_DEVICE_CONST_THREAD_PER_BLOCK];
-        __shared__ float sum_of_weight;
-
-        int tid = threadIdx.x;
-        float lambda = lambda_in[0];
-        float local_weight = 0.0f;
-        if (tid < n_elite) {
-            int sample_index = elite_indices[tid];
-            local_weight = expf(-input_samples[sample_index].cost / lambda);
-            elite_weights[tid] = local_weight;
-        }
-        sum_of_weight_shared[tid] = local_weight;
-        __syncthreads();
-
-        for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
-            if (tid < stride) {
-                sum_of_weight_shared[tid] += sum_of_weight_shared[tid + stride];
-            }
-            __syncthreads();
-        }
-        if (tid == 0) {
-            sum_of_weight = sum_of_weight_shared[0];
-            best_input[0].cost = input_samples[elite_indices[0]].cost;
-        }
-        __syncthreads();
-
-        int n_elements = _DEVICE_CONST_HORIZON * 4;
-        for (int element = tid; element < n_elements; element += blockDim.x) {
-            int horizon = element / 4;
-            int axis = element - horizon * 4;
-            float weighted_value = 0.0f;
-            for (int elite = 0; elite < n_elite; elite++) {
-                int sample_index = elite_indices[elite];
-                weighted_value +=
-                    input_samples[sample_index].decoupled_position[horizon][axis] *
-                    elite_weights[elite];
-            }
-            best_input[0].decoupled_position[horizon][axis] =
-                weighted_value / sum_of_weight;
-        }
-    }
+		dst[id].cost = src[elite_indices[id]].cost;
+		for(int i=0; i< _DEVICE_CONST_HORIZON; i++){
+			for(int j=0; j<4; j++){
+				dst[id].decoupled_position[i][j] = src[elite_indices[id]].decoupled_position[i][j];
+			}
+		}
+	}
 
     static void input_constraint_cpu(float& rps_cw1, float& rps_cw2, float& rps_ccw1, float& rps_ccw2){
 		// rps_cw1
@@ -508,26 +388,48 @@ namespace qc_mcmpc
 
     float mcmpc_controller::calc_weighted_average_and_min_cost(float var_and_z_i[])
 	{
-        select_elite_indices_and_lambda<<<1, _DEVICE_CONST_THREAD_PER_BLOCK>>>(
-            thrust::raw_pointer_cast(cost_device_vec_for_sorting.data()),
-            thrust::raw_pointer_cast(elite_indices_device_vec.data()),
-            thrust::raw_pointer_cast(elite_selected_flags_device_vec.data()),
-            thrust::raw_pointer_cast(elite_lambda_device_vec.data()),
-            CONST_PARAM::N_OF_SAMPLES,
-            CONST_PARAM::N_OF_THE_USING_BEST);
+		// 0, 1, 2, ... となる昇順インデックスを生成
+        thrust::sequence( indices_device_vec.begin(), indices_device_vec.end() );
 
-        calc_weighted_average_input_on_device<<<1, _DEVICE_CONST_THREAD_PER_BLOCK>>>(
-            thrust::raw_pointer_cast(input_array_device_vec.data()),
-            thrust::raw_pointer_cast(elite_indices_device_vec.data()),
-            thrust::raw_pointer_cast(elite_lambda_device_vec.data()),
-            thrust::raw_pointer_cast(best_input_array_device_vec.data()),
-            CONST_PARAM::N_OF_THE_USING_BEST);
+		// cost_device_vec_for_sortingを昇順にインデックスをソート
+        thrust::sort_by_key( cost_device_vec_for_sorting.begin(), cost_device_vec_for_sorting.end(), indices_device_vec.begin() );
 
-        cudaMemcpy(
-            &best_input_array,
-            thrust::raw_pointer_cast(best_input_array_device_vec.data()),
-            sizeof(input_array),
-            cudaMemcpyDeviceToHost);
+		// input_array_device_vec 中からエリートサンプルのみをホストにコピー，input_array_host_vec_elite はソート済みの配列となる
+        extract_elite_sample<<< CONST_PARAM::N_OF_THE_USING_BEST, 1 >>>( thrust::raw_pointer_cast( input_array_device_vec.data() ), thrust::raw_pointer_cast( input_array_device_vec_elite.data() ), thrust::raw_pointer_cast( indices_device_vec.data() ) );
+        input_array_host_vec_elite = input_array_device_vec_elite;
+
+		// コストを正規化するためのλを計算（expが0にならないための処理）
+        float lambda = 0.0f;
+
+        for ( int n = 0; n < CONST_PARAM::N_OF_THE_USING_BEST; n++ )
+            lambda += input_array_host_vec_elite[n].cost;
+        lambda /= (float)CONST_PARAM::N_OF_THE_USING_BEST;
+
+		// 加重平均を計算
+        float weight_temp;
+        float sum_of_weight = 0.0f;
+
+        for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ ){
+            for ( int j = 0; j < 4; j++ )
+                best_input_array.decoupled_position[i][j] = 0.0f;
+        }
+        for ( int n = 0; n < CONST_PARAM::N_OF_THE_USING_BEST; n++ )
+        {
+            weight_temp = exp( -input_array_host_vec_elite[n].cost / lambda );
+            sum_of_weight += weight_temp;
+
+            for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
+                for ( int j = 0; j < 4; j++ )
+                    best_input_array.decoupled_position[i][j] += input_array_host_vec_elite[n].decoupled_position[i][j] * weight_temp;
+        }
+
+        for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
+            for ( int j = 0; j < 4; j++ )
+                best_input_array.decoupled_position[i][j] /= sum_of_weight;
+
+		//
+        // 加重平均された入力列に対してコスト関数を再計算
+        best_input_array.cost = 0.0f;
 		return best_input_array.cost;
 	}
 

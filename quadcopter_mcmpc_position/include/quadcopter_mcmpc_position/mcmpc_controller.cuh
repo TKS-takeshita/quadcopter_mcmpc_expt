@@ -1,6 +1,7 @@
 #pragma once
 
 #include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
 #include "quadcopter_mcmpc_position/mcmpc_constants.cuh"
 
 enum decoupled_position
@@ -27,12 +28,12 @@ namespace qc_mcmpc
         input_array best_input_array;
         thrust::device_vector<input_array> input_array_device_vec;
 
-        // elite selection
+        // sort
+        thrust::device_vector<int> indices_device_vec;
         thrust::device_vector<float> cost_device_vec_for_sorting;
-        thrust::device_vector<int> elite_indices_device_vec;
-        thrust::device_vector<int> elite_selected_flags_device_vec;
-        thrust::device_vector<float> elite_lambda_device_vec;
-        thrust::device_vector<input_array> best_input_array_device_vec;
+
+        thrust::device_vector<input_array> input_array_device_vec_elite;
+        thrust::host_vector<input_array> input_array_host_vec_elite;
 
         float sigma_k[4];
 
