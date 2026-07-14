@@ -175,10 +175,6 @@ static void compute_nominal_acceleration_from_motor_speed_host(
     acc_ned[0] = r02 * force_body_z / CONST_PARAM_FLOAT::MASS_OF_MACHINE;
     acc_ned[1] = r12 * force_body_z / CONST_PARAM_FLOAT::MASS_OF_MACHINE;
     acc_ned[2] = r22 * force_body_z / CONST_PARAM_FLOAT::MASS_OF_MACHINE + CONST_PARAM_FLOAT::A_OF_GRAVITY;
-
-    for (int axis = 0; axis < 3; axis++) {
-        acc_ned[axis] += -CONST_PARAM_FLOAT::LINEAR_VELOCITY_DAMPING[axis] * velocity[axis];
-    }
 }
 
 static void update_acceleration_bias_observer_host(
@@ -897,9 +893,11 @@ int main(int argc, char *argv[])
         if (mcmpc_running) {
             float dx = target_host.x - quad_sim_base::var_array_to_integrate[7];
             float dy = target_host.y - quad_sim_base::var_array_to_integrate[8];
-            float waypoint_error = std::sqrt(dx * dx + dy * dy);
+            float waypoint_error_sq = dx * dx + dy * dy;
+            float square_waypoint_threshold_sq =
+                _SQUARE_WAYPOINT_THRESHOLD * _SQUARE_WAYPOINT_THRESHOLD;
             if ((mcmpc_log - square_waypoint_change_time) >= _SQUARE_WAYPOINT_HOLD_SEC &&
-                waypoint_error < _SQUARE_WAYPOINT_THRESHOLD &&
+                waypoint_error_sq < square_waypoint_threshold_sq &&
                 square_waypoint_index + 1 < _SQUARE_WAYPOINTS) {
                 set_square_waypoint(square_waypoint_index + 1);
             }

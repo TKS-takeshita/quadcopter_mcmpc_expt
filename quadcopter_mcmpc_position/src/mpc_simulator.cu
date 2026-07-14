@@ -144,7 +144,7 @@ namespace qc_mcmpc
         for (int m = 0; m < 4; m++) motor_raw[m] += 0.5f * (k_min + k_max) * px4_quad_x_mix[m][mix_axis];
     }
 
-    __device__ static void allocate_px4_quad_x_device(const float control_sp[4],float motor_setpoint[4],float unallocated_control[4])
+    __device__ static void allocate_px4_quad_x_motor_setpoint_device(const float control_sp[4], float motor_setpoint[4])
     {
         float motor_raw[4];
         for (int m = 0; m < 4; m++) {
@@ -172,6 +172,11 @@ namespace qc_mcmpc
                 px4_actuator_max[m]
             );
         }
+    }
+
+    __device__ static void allocate_px4_quad_x_device(const float control_sp[4],float motor_setpoint[4],float unallocated_control[4])
+    {
+        allocate_px4_quad_x_motor_setpoint_device(control_sp, motor_setpoint);
 
         for (int axis = 0; axis < 4; axis++) {
             float allocated = 0.0f;
@@ -200,25 +205,18 @@ namespace qc_mcmpc
             torque_body[1] += -rotor_positions[m][0] * (-force);
             torque_body[2] += rotor_yaw_signs[m] * moment_constant * motor_speed * motor_speed;
         }
-
-        for (int axis = 0; axis < 3; axis++) {
-            torque_body[axis] *= body_torque_scale[axis];
-        }
     }
 
     __device__ static void estimate_rate_int_bias_torque_device(const float rate_int[3], float thrust_z_setpoint, float bias_torque[3])
     {
-        float baseline_control[4] = {0.0f, 0.0f, 0.0f, thrust_z_setpoint};
         float trim_control[4] = {rate_int[0], rate_int[1], rate_int[2], thrust_z_setpoint};
-        float baseline_motor[4], trim_motor[4], unused[4];
-        float baseline_torque[3], trim_torque[3];
-        allocate_px4_quad_x_device(baseline_control, baseline_motor, unused);
-        allocate_px4_quad_x_device(trim_control, trim_motor, unused);
-        torque_from_motor_setpoint_no_lag_device(baseline_motor, baseline_torque);
+        float trim_motor[4];
+        float trim_torque[3];
+        allocate_px4_quad_x_motor_setpoint_device(trim_control, trim_motor);
         torque_from_motor_setpoint_no_lag_device(trim_motor, trim_torque);
-        bias_torque[0] = trim_torque[0] - baseline_torque[0];
-        bias_torque[1] = trim_torque[1] - baseline_torque[1];
-        bias_torque[2] = trim_torque[2] - baseline_torque[2];
+        bias_torque[0] = trim_torque[0];
+        bias_torque[1] = trim_torque[1];
+        bias_torque[2] = trim_torque[2];
     }
 
     __device__ void input_array::generate_input_array(curandState &state)
@@ -350,7 +348,10 @@ namespace qc_mcmpc
         } else if (pred_waypoint_index >= _SQUARE_WAYPOINTS) {
             pred_waypoint_index = _SQUARE_WAYPOINTS - 1;
         }
-        float pred_waypoint_change_time = square_waypoint_change_time_device;
+        float pred_elapsed_since_change = mcmpc_log_device - square_waypoint_change_time_device;
+        bool has_next_pred_waypoint = (pred_waypoint_index + 1 < _SQUARE_WAYPOINTS);
+        float square_waypoint_threshold_sq =
+            _SQUARE_WAYPOINT_THRESHOLD * _SQUARE_WAYPOINT_THRESHOLD;
 
         // 内部で位置/ヨー入力からsetpointを計算し，同定済み離散モデルで状態遷移する
         for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
@@ -781,9 +782,6 @@ namespace qc_mcmpc
                 torque_body[1] += -rotor_positions[m][0] * (-rotor_forces[m]);
                 torque_body[2] += rotor_yaw_signs[m] * moment_constant * motor_speed[m] * motor_speed[m];
             }
-            for (int axis = 0; axis < 3; axis++) {
-                torque_body[axis] *= body_torque_scale[axis];
-            }
             float bias_torque[3];
             estimate_rate_int_bias_torque_device(rate_int, thrust_setpoint[2], bias_torque);
             torque_body[0] -= bias_torque[0];
@@ -799,9 +797,6 @@ namespace qc_mcmpc
                 r22_force * force_body_z / mass_of_machine_device + a_of_gravity_device,
             };
 
-            acc_for_dynamics[0] += -linear_velocity_damping[0] * v_prev[0];
-            acc_for_dynamics[1] += -linear_velocity_damping[1] * v_prev[1];
-            acc_for_dynamics[2] += -linear_velocity_damping[2] * v_prev[2];
             acc_for_dynamics[0] += acceleration_bias_device[0];
             acc_for_dynamics[1] += acceleration_bias_device[1];
             acc_for_dynamics[2] += acceleration_bias_device[2];
@@ -816,15 +811,10 @@ namespace qc_mcmpc
                 w_prev[2]*inertia_omega[0] - w_prev[0]*inertia_omega[2],
                 w_prev[0]*inertia_omega[1] - w_prev[1]*inertia_omega[0],
             };
-            float angular_damping_torque[3] = {
-                angular_velocity_damping[0] * w_prev[0],
-                angular_velocity_damping[1] * w_prev[1],
-                angular_velocity_damping[2] * w_prev[2],
-            };
             float omega_dot_phys[3] = {
-                (torque_body[0] - angular_damping_torque[0] - cross_w_iw[0]) / i_xx_device,
-                (torque_body[1] - angular_damping_torque[1] - cross_w_iw[1]) / i_yy_device,
-                (torque_body[2] - angular_damping_torque[2] - cross_w_iw[2]) / i_zz_device,
+                (torque_body[0] - cross_w_iw[0]) / i_xx_device,
+                (torque_body[1] - cross_w_iw[1]) / i_yy_device,
+                (torque_body[2] - cross_w_iw[2]) / i_zz_device,
             };
             float omega_dot_for_dynamics[3] = {omega_dot_phys[0], omega_dot_phys[1], omega_dot_phys[2]};
 
@@ -886,21 +876,22 @@ namespace qc_mcmpc
                 var_and_z_i_temp[6] = 2.0f*w_plus[0]*(var_and_z_i_temp[0]*var_and_z_i_temp[2]+var_and_z_i_temp[1]*var_and_z_i_temp[3]) + w_plus[2]*(-1.0f+2.0f*var_and_z_i_temp[0]*var_and_z_i_temp[0]+2.0f*var_and_z_i_temp[3]*var_and_z_i_temp[3]) - 2.0f*w_plus[1]*(var_and_z_i_temp[0]*var_and_z_i_temp[1]-var_and_z_i_temp[2]*var_and_z_i_temp[3]);
             }
 #endif
-            float pred_time = mcmpc_log_device + (static_cast<float>(i) + 1.0f) * control_period_device;
-            float pred_waypoint_dx = pred_target_x - var_and_z_i_temp[7];
-            float pred_waypoint_dy = pred_target_y - var_and_z_i_temp[8];
-            float pred_waypoint_error = sqrtf(
-                pred_waypoint_dx * pred_waypoint_dx +
-                pred_waypoint_dy * pred_waypoint_dy
-            );
-            if ((pred_time - pred_waypoint_change_time) >= _SQUARE_WAYPOINT_HOLD_SEC &&
-                pred_waypoint_error < _SQUARE_WAYPOINT_THRESHOLD &&
-                pred_waypoint_index + 1 < _SQUARE_WAYPOINTS) {
-                pred_waypoint_index++;
-                pred_waypoint_change_time = pred_time;
-                pred_target_x = square_waypoints_device[pred_waypoint_index][0];
-                pred_target_y = square_waypoints_device[pred_waypoint_index][1];
-                pred_target_z = square_waypoints_device[pred_waypoint_index][2];
+            pred_elapsed_since_change += control_period_device;
+            if (has_next_pred_waypoint &&
+                pred_elapsed_since_change >= _SQUARE_WAYPOINT_HOLD_SEC) {
+                float pred_waypoint_dx = pred_target_x - var_and_z_i_temp[7];
+                float pred_waypoint_dy = pred_target_y - var_and_z_i_temp[8];
+                float pred_waypoint_error_sq =
+                    pred_waypoint_dx * pred_waypoint_dx +
+                    pred_waypoint_dy * pred_waypoint_dy;
+                if (pred_waypoint_error_sq < square_waypoint_threshold_sq) {
+                    pred_waypoint_index++;
+                    pred_elapsed_since_change = 0.0f;
+                    has_next_pred_waypoint = (pred_waypoint_index + 1 < _SQUARE_WAYPOINTS);
+                    pred_target_x = square_waypoints_device[pred_waypoint_index][0];
+                    pred_target_y = square_waypoints_device[pred_waypoint_index][1];
+                    pred_target_z = square_waypoints_device[pred_waypoint_index][2];
+                }
             }
 
             float vel_ref_cost[3];

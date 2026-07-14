@@ -255,6 +255,14 @@ MOTOR_THRUST_CONSTANT       = MOTOR_THRUST_CONSTANT_SDF * MOTOR_THRUST_SCALE
 # torque coefficient
 MOMENT_CONSTANT             = 8.0e-8
 
+ZERO3 = np.zeros(3, dtype=float)
+LINEAR_VELOCITY_DAMPING_ENABLED = bool(np.any(LINEAR_VELOCITY_DAMPING != 0.0))
+ANGULAR_VELOCITY_DAMPING_ENABLED = bool(np.any(ANGULAR_VELOCITY_DAMPING != 0.0))
+BODY_TORQUE_SCALE_ENABLED = bool(np.any(BODY_TORQUE_SCALE != 1.0))
+DRONE_INERTIA_DIAG = np.diag(DRONE_INERTIA).astype(float)
+DRONE_INERTIA_IS_DIAGONAL = bool(np.allclose(DRONE_INERTIA, np.diag(DRONE_INERTIA_DIAG)))
+DRONE_INERTIA_INV_DIAG = 1.0 / DRONE_INERTIA_DIAG
+
 STATE_NAMES = [
     "e0", "e1", "e2", "e3",
     "wx", "wy", "wz",
@@ -612,28 +620,77 @@ def motor_speed_from_setpoint(motor_setpoint, step_dt, prev_motor_speed=None):
 def motor_speed_to_force_torque(motor_speed):
     motor_speed = np.asarray(motor_speed, dtype=float)[:4]
     # 各ロータ推力: F = k_f * omega^2
-    rotor_forces = MOTOR_THRUST_CONSTANT * motor_speed * motor_speed
+    motor_speed_squared = motor_speed * motor_speed
+    rotor_forces = MOTOR_THRUST_CONSTANT * motor_speed_squared
     # FRD body座標では、上向き推力は body z負方向
     force_body = np.array([
         0.0,
         0.0,
         -np.sum(rotor_forces),
     ], dtype=float)
-    # 各ロータの位置による roll/pitch torque + 反トルク yaw
-    torque_body = np.zeros(3, dtype=float)
-    for motor_idx, (pos, force, yaw_sign) in enumerate(
-        zip(ROTOR_POSITIONS, rotor_forces, ROTOR_YAW_SIGNS)
-    ):
-        force_vec = np.array([0.0, 0.0, -force], dtype=float)
-        # 位置 x 力
-        torque_body += np.cross(pos, force_vec)
-        # ロータ反トルク
-        torque_body[2] += yaw_sign * MOMENT_CONSTANT * motor_speed[motor_idx] ** 2
-    torque_body *= BODY_TORQUE_SCALE
+    torque_body = np.array([
+        -np.dot(ROTOR_POSITIONS[:, 1], rotor_forces),
+        np.dot(ROTOR_POSITIONS[:, 0], rotor_forces),
+        MOMENT_CONSTANT * np.dot(ROTOR_YAW_SIGNS, motor_speed_squared),
+    ], dtype=float)
+    if BODY_TORQUE_SCALE_ENABLED:
+        torque_body *= BODY_TORQUE_SCALE
     return rotor_forces, force_body, torque_body
+
+
+def torque_from_motor_setpoint_no_lag(motor_setpoint):
+    motor_setpoint = np.clip(np.asarray(motor_setpoint, dtype=float)[:4], 0.0, 1.0)
+    motor_speed = np.clip(
+        motor_setpoint * MOTOR_INPUT_SCALING,
+        0.0,
+        MAX_ROT_VELOCITY,
+    )
+    motor_speed_squared = motor_speed * motor_speed
+    rotor_forces = MOTOR_THRUST_CONSTANT * motor_speed_squared
+    torque_body = np.array([
+        -np.dot(ROTOR_POSITIONS[:, 1], rotor_forces),
+        np.dot(ROTOR_POSITIONS[:, 0], rotor_forces),
+        MOMENT_CONSTANT * np.dot(ROTOR_YAW_SIGNS, motor_speed_squared),
+    ], dtype=float)
+    if BODY_TORQUE_SCALE_ENABLED:
+        torque_body *= BODY_TORQUE_SCALE
+    return torque_body
+
+
+def angular_acceleration_from_torque(torque_body, omega):
+    if DRONE_INERTIA_IS_DIAGONAL:
+        inertia_omega = DRONE_INERTIA_DIAG * omega
+        cross_term = np.array([
+            omega[1] * inertia_omega[2] - omega[2] * inertia_omega[1],
+            omega[2] * inertia_omega[0] - omega[0] * inertia_omega[2],
+            omega[0] * inertia_omega[1] - omega[1] * inertia_omega[0],
+        ], dtype=float)
+        rhs = torque_body - cross_term
+        if ANGULAR_VELOCITY_DAMPING_ENABLED:
+            rhs = rhs - ANGULAR_VELOCITY_DAMPING * omega
+        return rhs * DRONE_INERTIA_INV_DIAG
+
+    inertia_omega = DRONE_INERTIA @ omega
+    angular_damping_torque = (
+        ANGULAR_VELOCITY_DAMPING * omega
+        if ANGULAR_VELOCITY_DAMPING_ENABLED
+        else ZERO3
+    )
+    return np.linalg.solve(
+        DRONE_INERTIA,
+        torque_body - angular_damping_torque - np.cross(omega, inertia_omega),
+    )
 
 # roll, pitch, yaw, thrust_z の制御入力から4つのモータ指令を計算する
 def allocate_px4_quad_x(control_sp):
+    control_sp = np.asarray(control_sp, dtype=float)
+    motor_setpoint = allocate_px4_quad_x_motor_setpoint(control_sp)
+    allocated_control = PX4_QUAD_X_MIX_INV @ motor_setpoint
+    unallocated_control = control_sp - allocated_control
+    return motor_setpoint, unallocated_control
+
+
+def allocate_px4_quad_x_motor_setpoint(control_sp):
     control_sp = np.asarray(control_sp, dtype=float)
     roll_mix = PX4_QUAD_X_MIX[:, 0]
     pitch_mix = PX4_QUAD_X_MIX[:, 1]
@@ -672,9 +729,7 @@ def allocate_px4_quad_x(control_sp):
             actuator_max,
         )
     motor_setpoint = np.clip(motor_raw, PX4_ACTUATOR_MIN, PX4_ACTUATOR_MAX)
-    allocated_control = PX4_QUAD_X_MIX_INV @ motor_setpoint
-    unallocated_control = control_sp - allocated_control
-    return motor_setpoint, unallocated_control
+    return motor_setpoint
 
 #モータ出力が 0〜1 の範囲を超えたときに、指定した方向へ全体を動かして飽和を減らす関数
 def desaturate_motor_outputs(motor_raw, desaturation_vector, increase_only, actuator_max):
@@ -723,20 +778,14 @@ def desaturate_motor_outputs(motor_raw, desaturation_vector, increase_only, actu
     return motor_raw
 
 def estimate_rate_int_bias_torque(rate_int, thrust_z_setpoint, step_dt):
-    baseline_control = np.array([0.0, 0.0, 0.0, thrust_z_setpoint], dtype=float)
     trim_control = np.array([
         rate_int[0],
         rate_int[1],
         rate_int[2],
         thrust_z_setpoint,
     ], dtype=float)
-    baseline_motor, _ = allocate_px4_quad_x(baseline_control)
-    trim_motor, _ = allocate_px4_quad_x(trim_control)
-    baseline_speed = motor_speed_from_setpoint(baseline_motor, step_dt)
-    trim_speed = motor_speed_from_setpoint(trim_motor, step_dt)
-    _, _, baseline_torque = motor_speed_to_force_torque(baseline_speed)
-    _, _, trim_torque = motor_speed_to_force_torque(trim_speed)
-    return trim_torque - baseline_torque
+    trim_motor = allocate_px4_quad_x_motor_setpoint(trim_control)
+    return torque_from_motor_setpoint_no_lag(trim_motor)
 
 def should_apply_rate_int_bias_torque(using_actuator_motor_override):
     if not USE_RATE_INT_BIAS_TORQUE:
@@ -817,14 +866,18 @@ def dynamics_step(state, input_data, dt, prev_motor_speed=None):
             dtype=float,
         ).copy()
         translation_bias[~TRANSLATION_BIAS_AXES] = 0.0
-        linear_damping_acc = -LINEAR_VELOCITY_DAMPING * vel
-        acc_ned = thrust_acc_ned + translation_bias + linear_damping_acc
-        inertia_omega = DRONE_INERTIA @ omega
-        angular_damping_torque = ANGULAR_VELOCITY_DAMPING * omega
-        omega_dot = np.linalg.solve(
-            DRONE_INERTIA,
-            torque_body - angular_damping_torque - np.cross(omega, inertia_omega),
+        if LINEAR_VELOCITY_DAMPING_ENABLED:
+            linear_damping_acc = -LINEAR_VELOCITY_DAMPING * vel
+            acc_ned = thrust_acc_ned + translation_bias + linear_damping_acc
+        else:
+            linear_damping_acc = ZERO3
+            acc_ned = thrust_acc_ned + translation_bias
+        angular_damping_torque = (
+            ANGULAR_VELOCITY_DAMPING * omega
+            if ANGULAR_VELOCITY_DAMPING_ENABLED
+            else ZERO3
         )
+        omega_dot = angular_acceleration_from_torque(torque_body, omega)
         vel_next = vel + acc_ned * dt
         pos_next = pos + vel_next * dt
         omega_next = omega + omega_dot * dt
@@ -869,14 +922,18 @@ def dynamics_step(state, input_data, dt, prev_motor_speed=None):
             dtype=float,
         ).copy()
         translation_bias[~TRANSLATION_BIAS_AXES] = 0.0
-        linear_damping_acc = -LINEAR_VELOCITY_DAMPING * vel
-        acc_ned = thrust_acc_ned + translation_bias + linear_damping_acc
-        inertia_omega = DRONE_INERTIA @ omega
-        angular_damping_torque = ANGULAR_VELOCITY_DAMPING * omega
-        omega_dot = np.linalg.solve(
-            DRONE_INERTIA,
-            torque_body - angular_damping_torque - np.cross(omega, inertia_omega),
+        if LINEAR_VELOCITY_DAMPING_ENABLED:
+            linear_damping_acc = -LINEAR_VELOCITY_DAMPING * vel
+            acc_ned = thrust_acc_ned + translation_bias + linear_damping_acc
+        else:
+            linear_damping_acc = ZERO3
+            acc_ned = thrust_acc_ned + translation_bias
+        angular_damping_torque = (
+            ANGULAR_VELOCITY_DAMPING * omega
+            if ANGULAR_VELOCITY_DAMPING_ENABLED
+            else ZERO3
         )
+        omega_dot = angular_acceleration_from_torque(torque_body, omega)
         vel_next = vel + acc_ned * dt
         pos_next = pos + vel_next * dt
         omega_next = omega + omega_dot * dt

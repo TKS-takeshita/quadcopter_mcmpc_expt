@@ -144,9 +144,6 @@ namespace qc_mcmpc{
     extern __constant__ float px4_actuator_max[4];
     extern __constant__ float ca_minimum_yaw_margin;
 
-    extern __constant__ float linear_velocity_damping[3];
-    extern __constant__ float angular_velocity_damping[3];
-    extern __constant__ float body_torque_scale[3];
     extern __constant__ float acceleration_bias_device[3];
 
     extern __constant__ float angular_accel_lp;

@@ -93,9 +93,6 @@ namespace qc_mcmpc
     __constant__ float mc_yaw_tq_cutoff;
 
     __constant__ float ca_minimum_yaw_margin;
-    __constant__ float linear_velocity_damping[3];
-    __constant__ float angular_velocity_damping[3];
-    __constant__ float body_torque_scale[3];
     __constant__ float acceleration_bias_device[3];
     __constant__ int   motor_command_delay_steps;
 
@@ -288,9 +285,6 @@ namespace qc_mcmpc
         cudaMemcpyToSymbol( mc_yaw_tq_cutoff,            &CONST_PARAM_FLOAT::MC_YAW_TQ_CUTOFF,           sizeof(float));
 
         cudaMemcpyToSymbol( ca_minimum_yaw_margin,        &CONST_PARAM_FLOAT::CA_MINIMUM_YAW_MARGIN,     sizeof(float));
-        cudaMemcpyToSymbol( linear_velocity_damping,      CONST_PARAM_FLOAT::LINEAR_VELOCITY_DAMPING,    sizeof(CONST_PARAM_FLOAT::LINEAR_VELOCITY_DAMPING));
-        cudaMemcpyToSymbol( angular_velocity_damping,     CONST_PARAM_FLOAT::ANGULAR_VELOCITY_DAMPING,   sizeof(CONST_PARAM_FLOAT::ANGULAR_VELOCITY_DAMPING));
-        cudaMemcpyToSymbol( body_torque_scale,            CONST_PARAM_FLOAT::BODY_TORQUE_SCALE,          sizeof(CONST_PARAM_FLOAT::BODY_TORQUE_SCALE));
         {
             float acceleration_bias_init[3] = {0.0f, 0.0f, 0.0f};
             cudaMemcpyToSymbol(acceleration_bias_device, acceleration_bias_init, sizeof(acceleration_bias_init));
