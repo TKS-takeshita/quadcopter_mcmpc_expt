@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -10,6 +11,11 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 from matplotlib.collections import LineCollection
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+import dynamics as dyn
+
 
 default_csv = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_20260618_084500.csv"
 
@@ -18,8 +24,8 @@ dt = 0.02
 horizon = 75
 prediction_start_time = 0.1
 prediction_interval = 1.5
-RATE_DELAY_STEPS = 3
-ACC_DELAY_STEPS = 3
+RATE_DELAY_STEPS = 0
+ACC_DELAY_STEPS = 0
 
 SQUARE_Z = -1.0
 SQUARE_WAYPOINT_THRESHOLD = 0.15
@@ -130,6 +136,181 @@ rate_alias = {"wx_sp": "roll_rate", "wy_sp": "pitch_rate", "wz_sp": "yaw_rate"}
 rate_index = {name: i for i, name in enumerate(rate_names)}
 rate_to_state = {"roll_rate": "wx", "pitch_rate": "wy", "yaw_rate": "wz"}
 state_to_rate = {"wx": "roll_rate", "wy": "pitch_rate", "wz": "yaw_rate"}
+
+
+def prepare_mcmpc_dynamics_df(df):
+    df = df.copy()
+    column_map = {
+        "angular_vel_x": "cur_wx",
+        "angular_vel_y": "cur_wy",
+        "angular_vel_z": "cur_wz",
+        "pos_x": "cur_x",
+        "pos_y": "cur_y",
+        "pos_z": "cur_z",
+        "vel_x": "cur_vx",
+        "vel_y": "cur_vy",
+        "vel_z": "cur_vz",
+    }
+    for dst, src in column_map.items():
+        if dst not in df.columns and src in df.columns:
+            df[dst] = df[src]
+
+    if "control_time_s" not in df.columns and "t" in df.columns:
+        df["control_time_s"] = df["t"]
+
+    quat_cols = ["cur_e0", "cur_e1", "cur_e2", "cur_e3"]
+    if any(name not in df.columns for name in ("roll", "pitch", "yaw")) and all(col in df.columns for col in quat_cols):
+        q = df[quat_cols].to_numpy(float)
+        q_norm = np.linalg.norm(q, axis=1)
+        valid = np.isfinite(q).all(axis=1) & (q_norm > 1.0e-8)
+        qn = np.zeros_like(q, dtype=float)
+        qn[valid] = q[valid] / q_norm[valid, None]
+        qn[~valid, 0] = 1.0
+        qw, qx, qy, qz = qn[:, 0], qn[:, 1], qn[:, 2], qn[:, 3]
+        if "roll" not in df.columns:
+            df["roll"] = np.arctan2(
+                2.0 * (qw * qx + qy * qz),
+                1.0 - 2.0 * (qx * qx + qy * qy),
+            )
+        if "pitch" not in df.columns:
+            df["pitch"] = np.arcsin(np.clip(2.0 * (qw * qy - qz * qx), -1.0, 1.0))
+        if "yaw" not in df.columns:
+            df["yaw"] = np.arctan2(
+                2.0 * (qw * qz + qx * qy),
+                1.0 - 2.0 * (qy * qy + qz * qz),
+            )
+
+    if "target_yaw" not in df.columns:
+        if "u0_yaw" in df.columns:
+            df["target_yaw"] = df["u0_yaw"]
+        elif "yaw" in df.columns:
+            df["target_yaw"] = df["yaw"]
+
+    if "_segment_id" not in df.columns:
+        df["_segment_id"] = 0
+    if "_segment_time_s" not in df.columns and "t" in df.columns:
+        df["_segment_time_s"] = df["t"] - float(df["t"].iloc[0])
+    return df
+
+
+def row_vector(row, cols, default=0.0):
+    values = []
+    for col in cols:
+        if col not in row.index or not np.isfinite(row[col]):
+            return np.full(len(cols), default, dtype=float)
+        values.append(float(row[col]))
+    return np.asarray(values, dtype=float)
+
+
+def build_mcmpc_prev_acc_history(df, step_dt):
+    n = len(df)
+    prev_acc_hist = np.zeros((n, 3), dtype=float)
+    prev_vel = None
+    prev_acc = np.zeros(3, dtype=float)
+    alpha = (
+        step_dt / (step_dt + 1.0 / (2.0 * np.pi * dyn.MPC_VELD_LP))
+        if dyn.MPC_VELD_LP > 1.0e-6
+        else 1.0
+    )
+
+    for i, row in df.iterrows():
+        if i > 0 and "_segment_id" in df.columns and row["_segment_id"] != df.loc[i - 1, "_segment_id"]:
+            prev_vel = None
+            prev_acc = np.zeros(3, dtype=float)
+
+        vel = row_vector(row, ("vel_x", "vel_y", "vel_z"), default=np.nan)
+        if prev_vel is None or not np.all(np.isfinite(vel)):
+            prev_vel = vel.copy() if np.all(np.isfinite(vel)) else np.zeros(3, dtype=float)
+            prev_acc_hist[i] = prev_acc
+            continue
+
+        prev_acc_hist[i] = prev_acc
+        vel_dot = (vel - prev_vel) / step_dt
+        prev_acc = prev_acc + alpha * (vel_dot - prev_acc)
+        prev_vel = vel.copy()
+    return prev_acc_hist
+
+
+def mcmpc_context_from_log_row(df, row_idx, prev_acc_hist):
+    row = df.iloc[row_idx]
+    prev_row = df.iloc[row_idx - 1] if row_idx > 0 else row
+
+    hover_thrust = float(row["hover_thrust"]) if "hover_thrust" in row.index and np.isfinite(row["hover_thrust"]) else dyn.MPC_THR_HOVER
+    takeoff_state = int(row["takeoff_state"]) if "takeoff_state" in row.index and np.isfinite(row["takeoff_state"]) else dyn.TAKEOFF_STATE_FLIGHT
+
+    context = {
+        "prev_vel": row_vector(prev_row, ("vel_x", "vel_y", "vel_z")),
+        "prev_acc": prev_acc_hist[row_idx].copy(),
+        "vel_int": row_vector(row, ("model_vel_int_x", "model_vel_int_y", "model_vel_int_z")),
+        "prev_omega": row_vector(prev_row, ("angular_vel_x", "angular_vel_y", "angular_vel_z")),
+        "prev_omega_dot": row_vector(row, ("angular_accel_x", "angular_accel_y", "angular_accel_z")),
+        "rate_int": row_vector(row, ("rollspeed_integ", "pitchspeed_integ", "yawspeed_integ")),
+        "yaw_torque_lpf_state": None,
+        "motor_command_delay_buffer": [],
+        "saturation_positive": np.zeros(3, dtype=bool),
+        "saturation_negative": np.zeros(3, dtype=bool),
+        "takeoff_state": takeoff_state,
+        "hover_thrust": hover_thrust,
+        "last_hover_thrust_log": hover_thrust,
+        "acceleration_bias": row_vector(row, ("model_acc_bias_x", "model_acc_bias_y", "model_acc_bias_z")),
+        "force_bias": np.zeros(3, dtype=float),
+        "torque_bias": np.zeros(3, dtype=float),
+        "prev_model_acc": row_vector(row, ("model_acc_nominal_x", "model_acc_nominal_y", "model_acc_nominal_z"), default=np.nan),
+        "prev_log_vel": row_vector(row, ("vel_x", "vel_y", "vel_z")),
+        "next_rate_int_sync_time": np.inf,
+    }
+
+    motor_speed = row_vector(row, tuple(f"model_motor_speed_{i}" for i in range(4)), default=np.nan)
+    if not np.all(np.isfinite(motor_speed)):
+        motor_speed = None
+    return context, motor_speed
+
+
+def rollout_mcmpc_logged_plan(df, row_idx, pred_horizon, step_dt, prev_acc_hist):
+    state = dyn.state_from_row(df.loc[row_idx])
+    pred = np.full((pred_horizon + 1, len(state_names)), np.nan, dtype=float)
+    pred[0] = state.copy()
+    pred_omega_sp = np.full((pred_horizon + 1, 3), np.nan, dtype=float)
+    pred_acc_sp = np.full((pred_horizon + 1, 3), np.nan, dtype=float)
+    context, prev_motor_speed = mcmpc_context_from_log_row(df, row_idx, prev_acc_hist)
+    input_row = df.loc[row_idx].copy()
+
+    for h in range(pred_horizon):
+        input_data, input_debug, context = dyn.make_input_from_setpoint(
+            input_row,
+            state,
+            context,
+            step_dt,
+            horizon_step=h,
+            use_log_feedback=False,
+        )
+        state, step_debug = dyn.dynamics_step(
+            state,
+            input_data,
+            step_dt,
+            prev_motor_speed=prev_motor_speed,
+        )
+        step_debug.update(input_debug)
+        if "acc_used" in step_debug:
+            context["prev_model_acc"] = np.asarray(step_debug["acc_used"], dtype=float).copy()
+        prev_motor_speed = step_debug.get("motor_speed", prev_motor_speed)
+        pred[h + 1] = state.copy()
+        if "rate_sp" in step_debug:
+            pred_omega_sp[h] = np.asarray(step_debug["rate_sp"], dtype=float)
+        if "acc_sp" in step_debug:
+            pred_acc_sp[h] = np.asarray(step_debug["acc_sp"], dtype=float)
+    return pred, pred_omega_sp, pred_acc_sp
+
+
+def build_mcmpc_first_step_setpoint_history(df, step_dt, prev_acc_hist):
+    n = len(df)
+    omega_sp_hist = np.full((n, 3), np.nan, dtype=float)
+    acc_sp_hist = np.full((n, 3), np.nan, dtype=float)
+    for i in range(n):
+        _, omega_sp, acc_sp = rollout_mcmpc_logged_plan(df, i, 1, step_dt, prev_acc_hist)
+        omega_sp_hist[i] = omega_sp[0]
+        acc_sp_hist[i] = acc_sp[0]
+    return omega_sp_hist, acc_sp_hist
 
 
 class RLSModel:
@@ -1239,18 +1420,18 @@ def main():
     global dt, horizon, prediction_start_time, prediction_interval
 
     parser = argparse.ArgumentParser(
-        description="Prediction viewer that reproduces the identified internal model implemented in mpc_simulator.cu."
+        description="Prediction viewer that replays the current MCMPC model from logged inputs and internal state."
     )
     parser.add_argument("state", nargs="?", default="x")
     parser.add_argument("csv_path", nargs="?", default=default_csv)
-    parser.add_argument("--profile", choices=("px4", "simulation", "current", "legacy"), default="simulation")
-    parser.add_argument("--id-mode", choices=("online", "off"), default="off", help="legacy option retained for compatibility; prediction uses the dynamics_test model")
+    parser.add_argument("--profile", choices=("px4", "simulation", "current", "legacy"), default="current", help="legacy option retained for compatibility; ignored by the current model replay")
+    parser.add_argument("--id-mode", choices=("online", "off"), default="off", help="legacy option retained for compatibility; prediction uses dynamics.py")
     parser.add_argument("--horizon", type=int, default=horizon)
     parser.add_argument("--dt", type=float, default=dt)
     parser.add_argument("--prediction-start", type=float, default=prediction_start_time)
     parser.add_argument("--prediction-interval", type=float, default=prediction_interval)
-    parser.add_argument("--rate-delay-steps", type=int, default=RATE_DELAY_STEPS)
-    parser.add_argument("--acc-delay-steps", type=int, default=ACC_DELAY_STEPS)
+    parser.add_argument("--rate-delay-steps", type=int, default=RATE_DELAY_STEPS, help="legacy option retained for compatibility; ignored by the current model replay")
+    parser.add_argument("--acc-delay-steps", type=int, default=ACC_DELAY_STEPS, help="legacy option retained for compatibility; ignored by the current model replay")
     args = parser.parse_args()
 
     state = rate_alias.get(args.state, args.state)
@@ -1281,6 +1462,7 @@ def main():
         finite_dt = t_diff[np.isfinite(t_diff) & (t_diff > 0.0)]
         if len(finite_dt) > 0:
             csv_dt = float(np.median(finite_dt))
+    df = prepare_mcmpc_dynamics_df(df)
 
     cur_col = f"cur_{state}"
     target_col = f"target_{state}"
@@ -1325,98 +1507,26 @@ def main():
         print(f"[ERROR] missing column: {cur_col}")
         sys.exit(1)
 
-    square_target_index_hist, square_target_change_time_hist = build_square_target_history(df)
-
-    vel_dot_lpf_hist, vel_int_hist, omega_sp_hist, acc_sp_hist, internal_w_next_hist = build_simulator_history(
-        df,
-        rate_delay_steps=args.rate_delay_steps,
-        acc_delay_steps=args.acc_delay_steps,
-    )
+    prev_acc_hist = build_mcmpc_prev_acc_history(df, dt)
+    omega_sp_hist, acc_sp_hist = build_mcmpc_first_step_setpoint_history(df, dt, prev_acc_hist)
 
     print(f"[INFO] csv={csv_path}")
-    print(f"[INFO] state={state}, profile={args.profile}, id_mode={args.id_mode}, model_dt={dt:.6f}, csv_dt={csv_dt:.6f}, horizon={horizon}")
-    print("[INFO] model=dynamics_test_px4_like_internal_model, setpoints=px4_like_dynamics_test_model")
-    print(
-        "[INFO] square_route "
-        f"waypoints={SQUARE_WAYPOINTS[:, :2].tolist()}, "
-        f"hold={SQUARE_WAYPOINT_HOLD_SEC:.2f}s, threshold={SQUARE_WAYPOINT_THRESHOLD:.2f}m"
-    )
+    print(f"[INFO] state={state}, profile_arg={args.profile}, id_mode={args.id_mode}, model_dt={dt:.6f}, csv_dt={csv_dt:.6f}, horizon={horizon}")
+    print("[INFO] model=dynamics.py current MCMPC replay, setpoints=logged u0..uN")
     print(
         "[INFO] internal_model "
-        f"rate_delay_steps={args.rate_delay_steps}, acc_delay_steps={args.acc_delay_steps}"
+        f"rate_delay_steps=0, acc_delay_steps=0, motor_command_delay_steps={dyn.MOTOR_COMMAND_DELAY_STEPS}"
     )
     print(
         "[INFO] params "
-        f"MPC_XY_P={MPC_XY_P:.4g}, MPC_Z_P={MPC_Z_P:.4g}, "
-        f"MPC_XY_VEL_P/I/D={MPC_XY_VEL_P_ACC:.4g}/{MPC_XY_VEL_I_ACC:.4g}/{MPC_XY_VEL_D_ACC:.4g}, "
-        f"MPC_Z_VEL_P/I/D={MPC_Z_VEL_P_ACC:.4g}/{MPC_Z_VEL_I_ACC:.4g}/{MPC_Z_VEL_D_ACC:.4g}, "
-        f"MC_R/P/Y={MC_ROLL_P:.4g}/{MC_PITCH_P:.4g}/{MC_YAW_P:.4g}"
+        f"MPC_XY_P={dyn.MPC_XY_P:.4g}, MPC_Z_P={dyn.MPC_Z_P:.4g}, "
+        f"MPC_XY_VEL_P/I/D={dyn.MPC_XY_VEL_P_ACC:.4g}/{dyn.MPC_XY_VEL_I_ACC:.4g}/{dyn.MPC_XY_VEL_D_ACC:.4g}, "
+        f"MPC_Z_VEL_P/I/D={dyn.MPC_Z_VEL_P_ACC:.4g}/{dyn.MPC_Z_VEL_I_ACC:.4g}/{dyn.MPC_Z_VEL_D_ACC:.4g}, "
+        f"MC_R/P/Y={dyn.MC_ROLL_P:.4g}/{dyn.MC_PITCH_P:.4g}/{dyn.MC_YAW_P:.4g}"
     )
 
     def calc_prediction_one_row(row_idx):
-        row = df.iloc[row_idx]
-        s = np.zeros(len(state_names))
-
-        for name in state_names:
-            col = f"cur_{name}"
-            if col in df.columns:
-                s[state_index[name]] = row[col]
-
-        q = normalize(s[0:4])
-        if np.linalg.norm(q) < 1e-8:
-            q = np.array([1.0, 0.0, 0.0, 0.0])
-        s[0:4] = q
-
-        if row_idx == 0:
-            prev_vel = np.array([row["cur_vx"], row["cur_vy"], row["cur_vz"]], dtype=float)
-        else:
-            prev_row = df.iloc[row_idx - 1]
-            prev_vel = np.array([prev_row["cur_vx"], prev_row["cur_vy"], prev_row["cur_vz"]], dtype=float)
-
-        vel_dot_lpf = vel_dot_lpf_hist[row_idx].copy()
-        vel_int = vel_int_hist[row_idx].copy()
-        rls_ctx = None
-        route = {
-            "index": int(square_target_index_hist[row_idx]),
-            "row_index": int(square_target_index_hist[row_idx]),
-            "change_time": float(square_target_change_time_hist[row_idx]),
-        }
-
-        pred = np.zeros((horizon + 1, len(state_names)))
-        pred_omega_sp = np.full((horizon + 1, 3), np.nan, dtype=float)
-        pred_acc_sp = np.full((horizon + 1, 3), np.nan, dtype=float)
-
-        # pred[0] is the logged current state.  Then input u_h generates
-        # pred[h+1], matching the controller/simulator horizon indexing.
-        pred[0] = s.copy()
-        rate_delay_buffer = []
-        acc_delay_buffer = []
-
-        for h in range(horizon):
-            current_time = float(row["t"]) + h * dt
-            pos_sp = get_prediction_position_setpoint(row, h, route, s, current_time)
-            yaw_sp = get_prediction_yaw_setpoint(row, h, route)
-
-            s, omega_sp, acc_sp, vel_dot_lpf, vel_int = simulator_state_step_with_setpoint_rls(
-                s,
-                pos_sp,
-                yaw_sp,
-                prev_vel,
-                vel_dot_lpf,
-                vel_int,
-                dt,
-                rls_ctx,
-                rate_delay_buffer=rate_delay_buffer,
-                rate_delay_steps=args.rate_delay_steps,
-                acc_delay_buffer=acc_delay_buffer,
-                acc_delay_steps=args.acc_delay_steps,
-            )
-            pred_omega_sp[h] = omega_sp.copy()
-            pred_acc_sp[h] = acc_sp.copy()
-            pred[h + 1] = s.copy()
-            prev_vel = s[[state_index["vx"], state_index["vy"], state_index["vz"]]].copy()
-
-        return pred, pred_omega_sp, pred_acc_sp
+        return rollout_mcmpc_logged_plan(df, row_idx, horizon, dt, prev_acc_hist)
 
     segments = []
     setpoint_segments = [[], [], []]
@@ -1467,7 +1577,7 @@ def main():
                 df["t"],
                 df[px4_col],
                 color=color,
-                linewidth=2.0,
+                linewidth=2.4,
                 alpha=0.75,
                 label=f"px4_{name}",
             )
@@ -1475,7 +1585,7 @@ def main():
                 df["t"],
                 calc_hist[:, axis],
                 color=color,
-                linewidth=2.0,
+                linewidth=2.4,
                 linestyle="--",
                 label=f"calculated_{name}",
             )
@@ -1483,11 +1593,11 @@ def main():
                 lc = LineCollection(
                     setpoint_segments[axis],
                     colors=color,
-                    linewidths=1.3,
+                    linewidths=1.6,
                     alpha=0.9,
                 )
                 ax.add_collection(lc)
-                ax.plot([], [], color=color, linewidth=2, alpha=0.9, label=f"predicted_{name}")
+                ax.plot([], [], color=color, linewidth=2.4, alpha=0.9, label=f"predicted_{name}")
     elif is_acc_axis_plot:
         acc_axis = acc_index[state]
         px4_col = acc_cols[acc_axis]
@@ -1495,7 +1605,7 @@ def main():
             df["t"],
             df[px4_col],
             color="tab:blue",
-            linewidth=2.4,
+            linewidth=2.8,
             alpha=0.8,
             label=f"px4_{state}",
         )
@@ -1503,7 +1613,7 @@ def main():
             df["t"],
             acc_sp_hist[:, acc_axis],
             color="darkorange",
-            linewidth=2.2,
+            linewidth=2.6,
             linestyle="--",
             label=f"calculated_{state}",
         )
@@ -1514,7 +1624,7 @@ def main():
             df["t"],
             df[actual_cur_col],
             color="blue",
-            linewidth=3,
+            linewidth=3.4,
             label=actual_cur_col,
         )
     elif is_angular_state_plot:
@@ -1522,7 +1632,7 @@ def main():
             df["t"],
             df[cur_col],
             color="blue",
-            linewidth=3,
+            linewidth=3.4,
             label=cur_col,
         )
     else:
@@ -1530,7 +1640,7 @@ def main():
             df["t"],
             df[cur_col],
             color="blue",
-            linewidth=3,
+            linewidth=3.4,
             label=cur_col,
         )
 
@@ -1539,7 +1649,7 @@ def main():
                 df["t"],
                 df[u0_col],
                 color="gold",
-                linewidth=2,
+                linewidth=2.4,
                 label=u0_col,
             )
 
@@ -1547,20 +1657,20 @@ def main():
         lc = LineCollection(
             segments,
             colors="red" if not is_acc_axis_plot else "tab:green",
-            linewidths=1.5,
+            linewidths=1.8,
         )
         ax.add_collection(lc)
         pred_label = f"predicted_{state}"
         if is_angular_state_plot:
             pred_label = f"predicted_{state_to_rate[state]}"
-        ax.plot([], [], color="red" if not is_acc_axis_plot else "tab:green", linewidth=2, label=pred_label)
+        ax.plot([], [], color="red" if not is_acc_axis_plot else "tab:green", linewidth=2.4, label=pred_label)
 
     if (not is_setpoint_group_plot) and (not is_rate_plot) and (not is_angular_state_plot) and target_col in df.columns:
         ax.plot(
             df["t"],
             df[target_col],
             color="green",
-            linewidth=2,
+            linewidth=2.4,
             label=target_col,
         )
 

@@ -97,41 +97,16 @@ namespace qc_mcmpc
         }
     }
 
-    __device__ static float bench_rpm_from_actuator(float actuator)
-    {
-        const float throttle[15] = {
-            0.30f, 0.35f, 0.40f, 0.45f, 0.50f,
-            0.55f, 0.60f, 0.65f, 0.70f, 0.75f,
-            0.80f, 0.85f, 0.90f, 0.95f, 1.00f
-        };
-        const float rpm[15] = {
-            4042.0f, 4469.0f, 4855.0f, 5301.0f, 5780.0f,
-            6298.0f, 6800.0f, 7281.0f, 7679.0f, 8096.0f,
-            8468.0f, 8867.0f, 9257.0f, 9675.0f, 9857.0f
-        };
-        actuator = fminf(fmaxf(actuator, 0.0f), 1.0f);
-        if (actuator < throttle[0]) {
-            return actuator / throttle[0] * rpm[0];
-        }
-        for (int i = 0; i < 14; i++) {
-            if (actuator <= throttle[i + 1]) {
-                float t = (actuator - throttle[i]) / (throttle[i + 1] - throttle[i]);
-                return rpm[i] + t * (rpm[i + 1] - rpm[i]);
-            }
-        }
-        return rpm[14];
-    }
-
     __device__ static void desaturate_motor_outputs_device(
         float motor_raw[4],
-        const float desaturation_vector[4],
+        int mix_axis,
         bool increase_only,
         float actuator_max)
     {
         float k_min = 0.0f;
         float k_max = 0.0f;
         for (int m = 0; m < 4; m++) {
-            float desat = desaturation_vector[m];
+            float desat = px4_quad_x_mix[m][mix_axis];
             if (fabsf(desat) < 0.2f) continue;
             if (motor_raw[m] < 0.0f) {
                 float k = -motor_raw[m] / desat;
@@ -149,11 +124,11 @@ namespace qc_mcmpc
             return;
         }
 
-        for (int m = 0; m < 4; m++) motor_raw[m] += gain * desaturation_vector[m];
+        for (int m = 0; m < 4; m++) motor_raw[m] += gain * px4_quad_x_mix[m][mix_axis];
         k_min = 0.0f;
         k_max = 0.0f;
         for (int m = 0; m < 4; m++) {
-            float desat = desaturation_vector[m];
+            float desat = px4_quad_x_mix[m][mix_axis];
             if (fabsf(desat) < 0.2f) continue;
             if (motor_raw[m] < 0.0f) {
                 float k = -motor_raw[m] / desat;
@@ -166,60 +141,68 @@ namespace qc_mcmpc
                 k_max = fmaxf(k_max, k);
             }
         }
-        for (int m = 0; m < 4; m++) motor_raw[m] += 0.5f * (k_min + k_max) * desaturation_vector[m];
+        for (int m = 0; m < 4; m++) motor_raw[m] += 0.5f * (k_min + k_max) * px4_quad_x_mix[m][mix_axis];
     }
 
-    __device__ static void allocate_px4_quad_x_device(const float control_sp[4], float motor_setpoint[4], float unallocated_control[4])
+    __device__ static void allocate_px4_quad_x_device(const float control_sp[4],float motor_setpoint[4],float unallocated_control[4])
     {
-        const float roll_mix[4] = {-0.70710678f, 0.70710678f, 0.70710678f, -0.70710678f};
-        const float pitch_mix[4] = {0.70710678f, -0.70710678f, 0.70710678f, -0.70710678f};
-        const float yaw_mix[4] = {1.0f, 1.0f, -1.0f, -1.0f};
-        const float thrust_z_mix[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
-
         float motor_raw[4];
         for (int m = 0; m < 4; m++) {
-            motor_raw[m] = roll_mix[m] * control_sp[0] + pitch_mix[m] * control_sp[1] + thrust_z_mix[m] * control_sp[3];
+            motor_raw[m] = px4_quad_x_mix[m][0] * control_sp[0] + px4_quad_x_mix[m][1] * control_sp[1] + px4_quad_x_mix[m][3] * control_sp[3];
         }
 
-        desaturate_motor_outputs_device(motor_raw, thrust_z_mix, true, 1.0f);
-        desaturate_motor_outputs_device(motor_raw, roll_mix, false, 1.0f);
-        desaturate_motor_outputs_device(motor_raw, pitch_mix, false, 1.0f);
-
-        for (int m = 0; m < 4; m++) motor_raw[m] += yaw_mix[m] * control_sp[2];
-        desaturate_motor_outputs_device(motor_raw, yaw_mix, false, 1.15f);
-        desaturate_motor_outputs_device(motor_raw, thrust_z_mix, true, 1.0f);
+        desaturate_motor_outputs_device(motor_raw, 3, true,  px4_actuator_max[0]); // thrust_z
+        desaturate_motor_outputs_device(motor_raw, 0, false, px4_actuator_max[0]); // roll
+        desaturate_motor_outputs_device(motor_raw, 1, false, px4_actuator_max[0]); // pitch
 
         for (int m = 0; m < 4; m++) {
-            motor_setpoint[m] = fminf(fmaxf(motor_raw[m], 0.0f), 1.0f);
+            motor_raw[m] += px4_quad_x_mix[m][2] * control_sp[2]; // yaw
         }
 
-        float allocated_control[4];
-        allocated_control[0] = -0.35355339f*motor_setpoint[0] + 0.35355339f*motor_setpoint[1] + 0.35355339f*motor_setpoint[2] - 0.35355339f*motor_setpoint[3];
-        allocated_control[1] =  0.35355339f*motor_setpoint[0] - 0.35355339f*motor_setpoint[1] + 0.35355339f*motor_setpoint[2] - 0.35355339f*motor_setpoint[3];
-        allocated_control[2] =  0.25f*motor_setpoint[0] + 0.25f*motor_setpoint[1] - 0.25f*motor_setpoint[2] - 0.25f*motor_setpoint[3];
-        allocated_control[3] = -0.25f*motor_setpoint[0] - 0.25f*motor_setpoint[1] - 0.25f*motor_setpoint[2] - 0.25f*motor_setpoint[3];
-        for (int axis = 0; axis < 4; axis++) {
-            unallocated_control[axis] = control_sp[axis] - allocated_control[axis];
+        float yaw_actuator_max =
+            px4_actuator_max[0] +
+            (px4_actuator_max[0] - px4_actuator_min[0]) * ca_minimum_yaw_margin;
+
+        desaturate_motor_outputs_device(motor_raw, 2, false, yaw_actuator_max);     // yaw
+        desaturate_motor_outputs_device(motor_raw, 3, true,  px4_actuator_max[0]);  // thrust_z
+
+        for (int m = 0; m < 4; m++) {
+            motor_setpoint[m] = fminf(
+                fmaxf(motor_raw[m], px4_actuator_min[m]),
+                px4_actuator_max[m]
+            );
         }
+
+        for (int axis = 0; axis < 4; axis++) {
+            float allocated = 0.0f;
+            for (int m = 0; m < 4; m++) {
+                allocated += px4_quad_x_mix_inv[axis][m] * motor_setpoint[m];
+            }
+            unallocated_control[axis] = control_sp[axis] - allocated;
+        }
+    }
+
+    __device__ static float motor_speed_ref_from_setpoint_device(float motor_setpoint)
+    {
+        float ref = fminf(fmaxf(motor_setpoint, 0.0f), 1.0f) * motor_input_scaling;
+        return fminf(fmaxf(ref, 0.0f), max_rot_velocity);
     }
 
     __device__ static void torque_from_motor_setpoint_no_lag_device(const float motor_setpoint[4], float torque_body[3])
     {
-        const float motor_constant = 1.09e-5f * 0.9429863114169338f;
-        const float moment_constant = 1.5e-7f;
-        const float rotor_pos_x[4] = {0.180655f, -0.180655f, 0.180655f, -0.180655f};
-        const float rotor_pos_y[4] = {0.180655f, -0.180655f, -0.180655f, 0.180655f};
-        const float yaw_sign[4] = {1.0f, 1.0f, -1.0f, -1.0f};
         torque_body[0] = 0.0f;
         torque_body[1] = 0.0f;
         torque_body[2] = 0.0f;
         for (int m = 0; m < 4; m++) {
-            float rpm = bench_rpm_from_actuator(motor_setpoint[m]);
-            float motor_speed = rpm * (2.0f * M_PI / 60.0f);
-            float force = motor_constant * motor_speed * motor_speed;
-            torque_body[0] += rotor_pos_y[m] * (-force);
-            torque_body[1] += -rotor_pos_x[m] * (-force);
-            torque_body[2] += yaw_sign[m] * moment_constant * motor_speed * motor_speed;
+            float motor_speed = motor_speed_ref_from_setpoint_device(motor_setpoint[m]);
+            float force = motor_thrust_constant * motor_speed * motor_speed;
+            torque_body[0] += rotor_positions[m][1] * (-force);
+            torque_body[1] += -rotor_positions[m][0] * (-force);
+            torque_body[2] += rotor_yaw_signs[m] * moment_constant * motor_speed * motor_speed;
+        }
+
+        for (int axis = 0; axis < 3; axis++) {
+            torque_body[axis] *= body_torque_scale[axis];
         }
     }
 
@@ -357,20 +340,6 @@ namespace qc_mcmpc
         float att_setpoint[4];
         float thrust_setpoint[3];
         float omega_setpoint[3];
-        const int rate_delay_steps = 3;
-        const int acc_delay_steps = 3;
-        float rate_delay_buffer[rate_delay_steps][3];
-        float acc_delay_buffer[acc_delay_steps][3];
-        for (int d = 0; d < rate_delay_steps; d++) {
-            rate_delay_buffer[d][0] = initial_rate_delay_buffer_device[d][0];
-            rate_delay_buffer[d][1] = initial_rate_delay_buffer_device[d][1];
-            rate_delay_buffer[d][2] = initial_rate_delay_buffer_device[d][2];
-        }
-        for (int d = 0; d < acc_delay_steps; d++) {
-            acc_delay_buffer[d][0] = initial_acc_delay_buffer_device[d][0];
-            acc_delay_buffer[d][1] = initial_acc_delay_buffer_device[d][1];
-            acc_delay_buffer[d][2] = initial_acc_delay_buffer_device[d][2];
-        }
 
         float pred_target_x = target_state_device.x;
         float pred_target_y = target_state_device.y;
@@ -384,14 +353,14 @@ namespace qc_mcmpc
             float y_ref   = decoupled_position[i][y];
             float z_ref   = decoupled_position[i][z];
             float yaw_ref = decoupled_position[i][yaw];
-            bool flying = takeoff_state_device >= 5;
+            bool flying = takeoff_state_device >= takeoff_state_flight_device;
             bool landed_or_maybe_landed = landed_device || maybe_landed_device;
             bool flying_but_ground_contact = flying && (ground_contact_device || maybe_landed_device);
-            bool no_thrust = (takeoff_state_device < 4) || flying_but_ground_contact;
+            bool no_thrust = (takeoff_state_device < takeoff_state_rampup_device) || flying_but_ground_contact;
             float thrust_min = flying ? mpc_thr_min : 0.0f;
             float tilt_limit = takeoff_tilt_limit_device;
             if (!isfinite(tilt_limit) || tilt_limit <= 0.0f) {
-                tilt_limit = 0.78539816339f;
+                tilt_limit = mpc_tilt_max_device;
             }
             float hover_thrust = mpc_thr_hover;
             if (!isfinite(hover_thrust) || hover_thrust < 1.0e-6f) {
@@ -512,7 +481,7 @@ namespace qc_mcmpc
             }
             if (acc_setpoint[0] * acc_setpoint[0] + acc_setpoint[1] * acc_setpoint[1] >
                 acc_sp_xy_produced[0] * acc_sp_xy_produced[0] + acc_sp_xy_produced[1] * acc_sp_xy_produced[1]) {
-                float xy_arw_gain = 2.0f / mpc_xy_vel_p_acc;
+                float xy_arw_gain = arw_gain;
                 vel_error_for_int[0] -= xy_arw_gain * (acc_setpoint[0] - acc_sp_xy_produced[0]);
                 vel_error_for_int[1] -= xy_arw_gain * (acc_setpoint[1] - acc_sp_xy_produced[1]);
             }
@@ -707,7 +676,15 @@ namespace qc_mcmpc
                 (w_prev[1] - prev_omega[1]) / control_period_device,
                 (w_prev[2] - prev_omega[2]) / control_period_device,
             };
-            float omega_dot_lpf_alpha = control_period_device / (control_period_device + 1.0f / (2.0f * M_PI * 30.0f));
+
+            float omega_dot_lpf_alpha;
+            if (angular_accel_lp > 1.0e-6f) {
+                omega_dot_lpf_alpha = control_period_device /
+                    (control_period_device + 1.0f / (2.0f * M_PI * angular_accel_lp));
+            } else {
+                omega_dot_lpf_alpha = 1.0f;
+            }
+
             float omega_dot[3] = {
                 prev_omega_dot[0] + omega_dot_lpf_alpha * (raw_omega_dot[0] - prev_omega_dot[0]),
                 prev_omega_dot[1] + omega_dot_lpf_alpha * (raw_omega_dot[1] - prev_omega_dot[1]),
@@ -720,21 +697,33 @@ namespace qc_mcmpc
                 omega_setpoint[2] - w_prev[2],
             };
             float torque_setpoint[3] = {
-                mc_rollrate_p * rate_error[0] + rate_int[0] - mc_rollrate_d * omega_dot[0],
-                mc_pitchrate_p * rate_error[1] + rate_int[1] - mc_pitchrate_d * omega_dot[1],
-                mc_yawrate_p * rate_error[2] + rate_int[2] - mc_yawrate_d * omega_dot[2],
+                mc_rollrate_k  * mc_rollrate_p  * rate_error[0] + rate_int[0] - mc_rollrate_k  * mc_rollrate_d  * omega_dot[0] + mc_rollrate_ff  * omega_setpoint[0],
+                mc_pitchrate_k * mc_pitchrate_p * rate_error[1] + rate_int[1] - mc_pitchrate_k * mc_pitchrate_d * omega_dot[1] + mc_pitchrate_ff * omega_setpoint[1],
+                mc_yawrate_k   * mc_yawrate_p   * rate_error[2] + rate_int[2] - mc_yawrate_k   * mc_yawrate_d   * omega_dot[2] + mc_yawrate_ff   * omega_setpoint[2],
             };
-            float yaw_alpha = control_period_device / (control_period_device + 1.0f / (2.0f * M_PI * 2.0f));
-            if (!yaw_torque_lpf_initialized) {
+
+            if (mc_yaw_tq_cutoff > 1.0e-6f) {
+                float yaw_alpha = control_period_device /
+                    (control_period_device + 1.0f / (2.0f * M_PI * mc_yaw_tq_cutoff));
+
+                if (!yaw_torque_lpf_initialized) {
+                    yaw_torque_lpf_state = torque_setpoint[2];
+                    yaw_torque_lpf_initialized = true;
+                } else {
+                    yaw_torque_lpf_state += yaw_alpha * (torque_setpoint[2] - yaw_torque_lpf_state);
+                    torque_setpoint[2] = yaw_torque_lpf_state;
+                }
+            } else {
                 yaw_torque_lpf_state = torque_setpoint[2];
                 yaw_torque_lpf_initialized = true;
-            } else {
-                yaw_torque_lpf_state += yaw_alpha * (torque_setpoint[2] - yaw_torque_lpf_state);
-                torque_setpoint[2] = yaw_torque_lpf_state;
             }
 
-            float rate_i_gain[3] = {mc_rollrate_i, mc_pitchrate_i, mc_yawrate_i};
-            float rate_int_lim[3] = {0.30f, 0.30f, 0.30f};
+            float rate_i_gain[3] = {
+                mc_rollrate_k * mc_rollrate_i,
+                mc_pitchrate_k * mc_pitchrate_i,
+                mc_yawrate_k * mc_yawrate_i,
+            };
+            float rate_int_lim[3] = {mc_rr_int_lim, mc_pr_int_lim, mc_yr_int_lim};
             if (!landed_or_maybe_landed) {
                 for (int axis = 0; axis < 3; axis++) {
                     float err_for_int = rate_error[axis];
@@ -759,32 +748,34 @@ namespace qc_mcmpc
 
             float motor_speed[4];
             for (int m = 0; m < 4; m++) {
-                float rpm_ref = bench_rpm_from_actuator(motor_setpoint[m]);
-                float motor_speed_ref = rpm_ref * (2.0f * M_PI / 60.0f);
+                float motor_speed_ref = motor_speed_ref_from_setpoint_device(motor_setpoint[m]);
                 if (!motor_speed_initialized) {
                     motor_speed[m] = motor_speed_ref;
                 } else {
-                    float motor_tau = (motor_speed_ref > motor_speed_state[m]) ? 0.0125f : 0.025f;
+                    float prev_speed = fminf(fmaxf(motor_speed_state[m], 0.0f), max_rot_velocity);
+                    float motor_tau = (motor_speed_ref > prev_speed)
+                        ? motor_time_constant_up
+                        : motor_time_constant_down;
                     float motor_alpha = expf(-control_period_device / fmaxf(motor_tau, 1.0e-9f));
-                    motor_speed[m] = motor_alpha * motor_speed_state[m] + (1.0f - motor_alpha) * motor_speed_ref;
+                    motor_speed[m] = motor_alpha * prev_speed + (1.0f - motor_alpha) * motor_speed_ref;
                 }
                 motor_speed_state[m] = motor_speed[m];
             }
             motor_speed_initialized = true;
 
-            const float motor_constant = 1.09e-5f * 0.9429863114169338f;
-            const float moment_constant = 1.5e-7f;
             float rotor_forces[4];
-            for (int m = 0; m < 4; m++) rotor_forces[m] = motor_constant * motor_speed[m] * motor_speed[m];
+            for (int m = 0; m < 4; m++) {
+                rotor_forces[m] = motor_thrust_constant * motor_speed[m] * motor_speed[m];
+            }
             float force_body_z = -(rotor_forces[0] + rotor_forces[1] + rotor_forces[2] + rotor_forces[3]);
             float torque_body[3] = {0.0f, 0.0f, 0.0f};
-            const float rotor_pos_x[4] = {0.180655f, -0.180655f, 0.180655f, -0.180655f};
-            const float rotor_pos_y[4] = {0.180655f, -0.180655f, -0.180655f, 0.180655f};
-            const float yaw_sign[4] = {1.0f, 1.0f, -1.0f, -1.0f};
             for (int m = 0; m < 4; m++) {
-                torque_body[0] += rotor_pos_y[m] * (-rotor_forces[m]);
-                torque_body[1] += -rotor_pos_x[m] * (-rotor_forces[m]);
-                torque_body[2] += yaw_sign[m] * moment_constant * motor_speed[m] * motor_speed[m];
+                torque_body[0] += rotor_positions[m][1] * (-rotor_forces[m]);
+                torque_body[1] += -rotor_positions[m][0] * (-rotor_forces[m]);
+                torque_body[2] += rotor_yaw_signs[m] * moment_constant * motor_speed[m] * motor_speed[m];
+            }
+            for (int axis = 0; axis < 3; axis++) {
+                torque_body[axis] *= body_torque_scale[axis];
             }
             float bias_torque[3];
             estimate_rate_int_bias_torque_device(rate_int, thrust_setpoint[2], bias_torque);
@@ -800,11 +791,14 @@ namespace qc_mcmpc
                 r12_force * force_body_z / mass_of_machine_device,
                 r22_force * force_body_z / mass_of_machine_device + a_of_gravity_device,
             };
-            float acc_ned_fresh[3] = {
-                acc_for_dynamics[0],
-                acc_for_dynamics[1],
-                acc_for_dynamics[2],
-            };
+
+            acc_for_dynamics[0] += -linear_velocity_damping[0] * v_prev[0];
+            acc_for_dynamics[1] += -linear_velocity_damping[1] * v_prev[1];
+            acc_for_dynamics[2] += -linear_velocity_damping[2] * v_prev[2];
+            acc_for_dynamics[0] += acceleration_bias_device[0];
+            acc_for_dynamics[1] += acceleration_bias_device[1];
+            acc_for_dynamics[2] += acceleration_bias_device[2];
+
             float inertia_omega[3] = {
                 i_xx_device * w_prev[0],
                 i_yy_device * w_prev[1],
@@ -815,59 +809,37 @@ namespace qc_mcmpc
                 w_prev[2]*inertia_omega[0] - w_prev[0]*inertia_omega[2],
                 w_prev[0]*inertia_omega[1] - w_prev[1]*inertia_omega[0],
             };
+            float angular_damping_torque[3] = {
+                angular_velocity_damping[0] * w_prev[0],
+                angular_velocity_damping[1] * w_prev[1],
+                angular_velocity_damping[2] * w_prev[2],
+            };
             float omega_dot_phys[3] = {
-                (torque_body[0] - cross_w_iw[0]) / i_xx_device,
-                (torque_body[1] - cross_w_iw[1]) / i_yy_device,
-                (torque_body[2] - cross_w_iw[2]) / i_zz_device,
+                (torque_body[0] - angular_damping_torque[0] - cross_w_iw[0]) / i_xx_device,
+                (torque_body[1] - angular_damping_torque[1] - cross_w_iw[1]) / i_yy_device,
+                (torque_body[2] - angular_damping_torque[2] - cross_w_iw[2]) / i_zz_device,
             };
             float omega_dot_for_dynamics[3] = {omega_dot_phys[0], omega_dot_phys[1], omega_dot_phys[2]};
-            float omega_dot_phys_fresh[3] = {omega_dot_phys[0], omega_dot_phys[1], omega_dot_phys[2]};
-
-            for (int axis = 0; axis < 3; axis++) {
-                acc_for_dynamics[axis] = acc_delay_buffer[0][axis];
-                omega_dot_for_dynamics[axis] = rate_delay_buffer[0][axis];
-            }
-            for (int d = 0; d < acc_delay_steps - 1; d++) {
-                acc_delay_buffer[d][0] = acc_delay_buffer[d + 1][0];
-                acc_delay_buffer[d][1] = acc_delay_buffer[d + 1][1];
-                acc_delay_buffer[d][2] = acc_delay_buffer[d + 1][2];
-            }
-            acc_delay_buffer[acc_delay_steps - 1][0] = acc_ned_fresh[0];
-            acc_delay_buffer[acc_delay_steps - 1][1] = acc_ned_fresh[1];
-            acc_delay_buffer[acc_delay_steps - 1][2] = acc_ned_fresh[2];
-            for (int d = 0; d < rate_delay_steps - 1; d++) {
-                rate_delay_buffer[d][0] = rate_delay_buffer[d + 1][0];
-                rate_delay_buffer[d][1] = rate_delay_buffer[d + 1][1];
-                rate_delay_buffer[d][2] = rate_delay_buffer[d + 1][2];
-            }
-            rate_delay_buffer[rate_delay_steps - 1][0] = omega_dot_phys_fresh[0];
-            rate_delay_buffer[rate_delay_steps - 1][1] = omega_dot_phys_fresh[1];
-            rate_delay_buffer[rate_delay_steps - 1][2] = omega_dot_phys_fresh[2];
 
             float w_next[3] = {
                 w_prev[0] + omega_dot_for_dynamics[0] * control_period_device,
                 w_prev[1] + omega_dot_for_dynamics[1] * control_period_device,
                 w_prev[2] + omega_dot_for_dynamics[2] * control_period_device,
             };
-            float w_mid[3] = {
-                0.5f * (w_prev[0] + w_next[0]),
-                0.5f * (w_prev[1] + w_next[1]),
-                0.5f * (w_prev[2] + w_next[2]),
-            };
-
-            var_and_z_i_temp[7] += v_prev[0] * control_period_device;
-            var_and_z_i_temp[8] += v_prev[1] * control_period_device;
-            var_and_z_i_temp[9] += v_prev[2] * control_period_device;
 
             var_and_z_i_temp[10] = v_prev[0] + acc_for_dynamics[0] * control_period_device;
             var_and_z_i_temp[11] = v_prev[1] + acc_for_dynamics[1] * control_period_device;
             var_and_z_i_temp[12] = v_prev[2] + acc_for_dynamics[2] * control_period_device;
 
+            var_and_z_i_temp[7] += var_and_z_i_temp[10] * control_period_device;
+            var_and_z_i_temp[8] += var_and_z_i_temp[11] * control_period_device;
+            var_and_z_i_temp[9] += var_and_z_i_temp[12] * control_period_device;
+
             float q_dot[4];
-            q_dot[0] = -0.5f * (q_prev[1] * w_mid[0] + q_prev[2] * w_mid[1] + q_prev[3] * w_mid[2]);
-            q_dot[1] =  0.5f * (q_prev[0] * w_mid[0] + q_prev[2] * w_mid[2] - q_prev[3] * w_mid[1]);
-            q_dot[2] =  0.5f * (q_prev[0] * w_mid[1] - q_prev[1] * w_mid[2] + q_prev[3] * w_mid[0]);
-            q_dot[3] =  0.5f * (q_prev[0] * w_mid[2] + q_prev[1] * w_mid[1] - q_prev[2] * w_mid[0]);
+            q_dot[0] = -0.5f * (q_prev[1] * w_next[0] + q_prev[2] * w_next[1] + q_prev[3] * w_next[2]);
+            q_dot[1] =  0.5f * (q_prev[0] * w_next[0] + q_prev[2] * w_next[2] - q_prev[3] * w_next[1]);
+            q_dot[2] =  0.5f * (q_prev[0] * w_next[1] - q_prev[1] * w_next[2] + q_prev[3] * w_next[0]);
+            q_dot[3] =  0.5f * (q_prev[0] * w_next[2] + q_prev[1] * w_next[1] - q_prev[2] * w_next[0]);
 
             var_and_z_i_temp[0] = q_prev[0] + q_dot[0] * control_period_device;
             var_and_z_i_temp[1] = q_prev[1] + q_dot[1] * control_period_device;

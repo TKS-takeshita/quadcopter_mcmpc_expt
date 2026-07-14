@@ -101,7 +101,6 @@ namespace qc_mcmpc{
     extern __constant__ float mc_yawrate_i;
     extern __constant__ float lpf;
     extern __constant__ float mpc_thr_hover;
-    extern __constant__ float mpc_vel_lp;
     extern __constant__ float mpc_veld_lp;
 
     extern __constant__ float control_period_device;
@@ -115,8 +114,6 @@ namespace qc_mcmpc{
     extern __constant__ float rate_int_device[3];
     extern __constant__ float prev_motor_speed_device[4];
     extern __constant__ int prev_motor_speed_valid_device;
-    extern __constant__ float initial_rate_delay_buffer_device[3][3];
-    extern __constant__ float initial_acc_delay_buffer_device[3][3];
 
     // __constant__ GPUのconstantメモリ（各制御周期ごとにCPUから更新）
     extern __constant__ float var_and_z_i_device[_N_OF_ODES + 1];
@@ -131,6 +128,44 @@ namespace qc_mcmpc{
     extern __constant__ int landed_device;
     extern __constant__ int ground_contact_device;
     extern __constant__ int maybe_landed_device;
+
+    extern __constant__ float motor_input_scaling;
+    extern __constant__ float max_rot_velocity;
+    extern __constant__ float motor_time_constant_up;
+    extern __constant__ float motor_time_constant_down;
+    extern __constant__ float motor_thrust_constant;
+    extern __constant__ float moment_constant;
+
+    extern __constant__ float rotor_positions[4][3];
+    extern __constant__ float rotor_yaw_signs[4];
+    extern __constant__ float px4_quad_x_mix[4][4];
+    extern __constant__ float px4_quad_x_mix_inv[4][4];
+    extern __constant__ float px4_actuator_min[4];
+    extern __constant__ float px4_actuator_max[4];
+    extern __constant__ float ca_minimum_yaw_margin;
+
+    extern __constant__ float linear_velocity_damping[3];
+    extern __constant__ float angular_velocity_damping[3];
+    extern __constant__ float body_torque_scale[3];
+    extern __constant__ float acceleration_bias_device[3];
+
+    extern __constant__ float angular_accel_lp;
+    extern __constant__ float mc_rollrate_k;
+    extern __constant__ float mc_pitchrate_k;
+    extern __constant__ float mc_yawrate_k;
+    extern __constant__ float mc_rollrate_ff;
+    extern __constant__ float mc_pitchrate_ff;
+    extern __constant__ float mc_yawrate_ff;
+    extern __constant__ float mc_rr_int_lim;
+    extern __constant__ float mc_pr_int_lim;
+    extern __constant__ float mc_yr_int_lim;
+    extern __constant__ float mc_yaw_tq_cutoff;
+
+    extern __constant__ int   takeoff_state_rampup_device;
+    extern __constant__ int   takeoff_state_flight_device;
+    extern __constant__ float mpc_tilt_max_device;
+
+    extern __constant__ int motor_command_delay_steps;
 
     extern void update_target_state_device();
 

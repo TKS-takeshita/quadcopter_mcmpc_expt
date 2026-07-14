@@ -82,7 +82,6 @@ A_OF_GRAVITY                                = 9.80665
 CA_MINIMUM_YAW_MARGIN                       = 0.15 #PX4 allocatorのyaw用余裕
 ANGULAR_ACCEL_LP                            = 30.0 #角速度微分のLPFカットオフ周波数
 MPC_ACC_DECOUPLE                            = False #PX4の加速度-スラスト変換でz加速度を切り離すか
-RATE_DELAY_STEPS                            = 0 #角速度ダイナミクスに入れる角加速度の遅れ近似
 MOTOR_COMMAND_DELAY_STEPS                   = 0 #モータ指令がモデル反映までの遅れ
 ACTUATOR_LOG_SHIFT_STEPS                    = -1 #actuator_logの時刻補正
 TARGET_LOCAL_SP_DELAY_STEPS                 = 2 #target local position setpointの遅れ
@@ -136,7 +135,6 @@ if SIMULATION:
     MPC_XY_VEL_MAX              = 12.0
     MPC_Z_VEL_MAX_UP            = 3.0
     MPC_Z_VEL_MAX_DOWN          = 1.0
-    MPC_TKO_RAMP_T              = 3.0
     MPC_THR_HOVER               = 0.6295
     MPC_THR_MIN                 = 0.10
     MPC_THR_MAX                 = 0.90
@@ -178,7 +176,6 @@ if SIMULATION:
     MAX_ROT_VELOCITY            = 1120.0 #SDF maxRotVelocity [rad/s]
     MOTOR_TIME_CONSTANT_UP      = 0.0125 #SDF timeConstantUp
     MOTOR_TIME_CONSTANT_DOWN    = 0.025 #SDF timeConstantDown
-    ROTOR_VELOCITY_SLOWDOWN_SIM = 10.0 #モータ回転数のシミュレータ上の遅延係数
 else:
     MPC_XY_P = 0.95
     MPC_Z_P = 1.00
@@ -191,7 +188,6 @@ else:
     MPC_XY_VEL_MAX = 43.2 / 3.6
     MPC_Z_VEL_MAX_UP = 10.8 / 3.6
     MPC_Z_VEL_MAX_DOWN = 5.4 / 3.6
-    MPC_TKO_RAMP_T = 3.0
     MPC_THR_HOVER = 0.46 #実機ログで最も合うため固定
     MPC_THR_MIN = 0.12
     MPC_THR_MAX = 1.00
@@ -228,18 +224,12 @@ else:
     DRONE_MASS = 1.62
     DRONE_INERTIA = np.diag([0.0418, 0.04226, 0.05619])
 
-    # MOTOR MODEL: real vehicle / bench measurement model
-    MOTOR_SPEED_MODEL           = "bench_table"
-    MOTOR_INPUT_SCALING         = 1180.0 #bench_tableを線形近似するときの予備値[rad/s]
-    BENCH_THROTTLE_TABLE        = np.array([30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100], dtype=float)/100.0
-    BENCH_RPM                   = np.array([4042, 4469, 4855, 5301, 5780, 6298, 6800, 7281, 7679, 8096, 8468, 8867, 9257, 9675, 9857], dtype=float)
-    BENCH_MIN_THROTTLE          = BENCH_THROTTLE_TABLE[0]
-    BENCH_MIN_RPM               = BENCH_RPM[0]
-    BENCH_MAX_RPM               = BENCH_RPM[-1]
-    MAX_ROT_VELOCITY            = BENCH_MAX_RPM * (2.0 * np.pi / 60.0)
+    # MOTOR MODEL: real vehicle linear approximation
+    MOTOR_SPEED_MODEL           = "linear"
+    MOTOR_INPUT_SCALING         = 1180.0
+    MAX_ROT_VELOCITY            = 1180.0
     MOTOR_TIME_CONSTANT_UP      = 0.004 #要同定: モータ回転数が上がる際の時定数
     MOTOR_TIME_CONSTANT_DOWN    = 0.070 #要同定: モータ回転数が下がる際の時定数
-    ROTOR_VELOCITY_SLOWDOWN_SIM = 1.0 #実機ではGazebo表示用slowdownは使わない
 ROTOR_POSITIONS = np.array([
     [0.180655, 0.180655, 0.0],   # rotor_1 front right, ccw
     [-0.180655, -0.180655, 0.0], # rotor_2 back left, ccw
@@ -597,15 +587,7 @@ def actuator_motor_from_row(row):
 def motor_speed_from_setpoint(motor_setpoint, step_dt, prev_motor_speed=None):
     motor_setpoint = np.clip(np.asarray(motor_setpoint, dtype=float)[:4], 0.0, 1.0)
 
-    if MOTOR_SPEED_MODEL == "bench_table":
-        rpm_ref = np.interp(motor_setpoint, BENCH_THROTTLE_TABLE, BENCH_RPM) #直線補間
-        below_table = motor_setpoint < BENCH_MIN_THROTTLE
-        rpm_ref[below_table] = (
-            motor_setpoint[below_table] / BENCH_MIN_THROTTLE * BENCH_MIN_RPM
-        )
-        rpm_ref = np.clip(rpm_ref, 0.0, BENCH_MAX_RPM)
-        motor_speed_ref = rpm_ref * (2.0 * np.pi / 60.0)
-    elif MOTOR_SPEED_MODEL == "linear":
+    if MOTOR_SPEED_MODEL == "linear":
         motor_speed_ref = motor_setpoint * MOTOR_INPUT_SCALING
         motor_speed_ref = np.clip(motor_speed_ref, 0.0, MAX_ROT_VELOCITY)
     else:

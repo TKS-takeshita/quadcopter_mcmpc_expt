@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cmath>
 
 //#define UNPREDICTABLE_IMPULSE
 //#define UNPREDICTABLE_COLLISION_WITH_WALL
@@ -113,7 +114,33 @@ struct CONST_PARAM
 
 	static const std::string FILE_HEADER[11];
 
+    // motor dynamics
+    static const double MOTOR_INPUT_SCALING;
+    static const double MAX_ROT_VELOCITY;
+    static const double MOTOR_TIME_CONSTANT_UP;
+    static const double MOTOR_TIME_CONSTANT_DOWN;
+    static const double MOTOR_THRUST_CONSTANT_SDF;
+    static const double MOTOR_THRUST_SCALE;
+    static const double MOTOR_THRUST_CONSTANT;
+    static const double MOMENT_CONSTANT;
+
+    // rotor / allocator
+    static const double ROTOR_POSITIONS[4][3];
+    static const double ROTOR_YAW_SIGNS[4];
+    static const double PX4_QUAD_X_MIX[4][4];
+    static const double PX4_QUAD_X_MIX_INV[4][4];
+    static const double PX4_ACTUATOR_MIN[4];
+    static const double PX4_ACTUATOR_MAX[4];
+    static const double CA_MINIMUM_YAW_MARGIN;
+
+    // vehicle dynamics
+    static const double LINEAR_VELOCITY_DAMPING[3];
+    static const double ANGULAR_VELOCITY_DAMPING[3];
+    static const double BODY_TORQUE_SCALE[3];
+
     // QGC setting
+    // position /thrust control
+    static const double MPC_TILT_MAX;
     static const double MPC_XY_P;
     static const double MPC_Z_P;
     static const double MPC_XY_VEL_P_ACC;
@@ -125,27 +152,39 @@ struct CONST_PARAM
     static const double MPC_XY_VEL_MAX;
     static const double MPC_Z_VEL_MAX_UP;
     static const double MPC_Z_VEL_MAX_DOWN;
+    static const double MPC_THR_HOVER;
     static const double MPC_THR_MIN;
     static const double MPC_THR_MAX;
     static const double MPC_THR_XY_MARGIN;
-    static const double MC_YAW_WEIGHT;
+    static const double MPC_VELD_LP;
+    // attitude / rate control
     static const double MC_ROLL_P;
     static const double MC_PITCH_P;
     static const double MC_YAW_P;
-    static const double MPC_THR_HOVER;
-    static const double MPC_VEL_LP;
-    static const double MPC_VELD_LP;
+    static const double MC_YAW_WEIGHT;
+    static const double MC_ROLLRATE_MAX;
+    static const double MC_PITCHRATE_MAX;
+    static const double MC_YAWRATE_MAX;
+    static const double ANGULAR_ACCEL_LP;
     static const double MC_ROLLRATE_P;
     static const double MC_PITCHRATE_P;
     static const double MC_YAWRATE_P;
+    static const double MC_ROLLRATE_K;
+    static const double MC_PITCHRATE_K;
+    static const double MC_YAWRATE_K;
     static const double MC_ROLLRATE_D;
     static const double MC_PITCHRATE_D;
     static const double MC_YAWRATE_D;
     static const double MC_ROLLRATE_I;
     static const double MC_PITCHRATE_I;
     static const double MC_YAWRATE_I;
-    static const double CA_ROTOR_KM[4];
-    static const double CA_ROTOR_CT[4];
+    static const double MC_ROLLRATE_FF;
+    static const double MC_PITCHRATE_FF;
+    static const double MC_YAWRATE_FF;
+    static const double MC_RR_INT_LIM;
+    static const double MC_PR_INT_LIM;
+    static const double MC_YR_INT_LIM;
+    static const double MC_YAW_TQ_CUTOFF;
 
     static const double ARW_GAIN;
     
@@ -169,6 +208,11 @@ struct CONST_PARAM
     static const double INIT_TARGET_FY;
     static const double INIT_TARGET_FZ;
 #endif
+
+    static const bool MPC_ACC_DECOUPLE;
+    static const int MOTOR_COMMAND_DELAY_STEPS;
+    static const int TAKEOFF_STATE_RAMPUP;
+    static const int TAKEOFF_STATE_FLIGHT;
 };
 
 struct CONST_PARAM_FLOAT
@@ -207,7 +251,33 @@ struct CONST_PARAM_FLOAT
 
     static const float SIGMA_CONST[4];
 
+    // motor model
+    static const float MOTOR_INPUT_SCALING;
+    static const float MAX_ROT_VELOCITY;
+    static const float MOTOR_TIME_CONSTANT_UP;
+    static const float MOTOR_TIME_CONSTANT_DOWN;
+    static const float MOTOR_THRUST_CONSTANT_SDF;
+    static const float MOTOR_THRUST_SCALE;
+    static const float MOTOR_THRUST_CONSTANT;
+    static const float MOMENT_CONSTANT;
+
+    // rotor / allocator
+    static const float ROTOR_POSITIONS[4][3];
+    static const float ROTOR_YAW_SIGNS[4];
+    static const float PX4_QUAD_X_MIX[4][4];
+    static const float PX4_QUAD_X_MIX_INV[4][4];
+    static const float PX4_ACTUATOR_MIN[4];
+    static const float PX4_ACTUATOR_MAX[4];
+    static const float CA_MINIMUM_YAW_MARGIN;
+
+    // vehicle dynamics
+    static const float LINEAR_VELOCITY_DAMPING[3];
+    static const float ANGULAR_VELOCITY_DAMPING[3];
+    static const float BODY_TORQUE_SCALE[3];
+
     // QGC setting
+    // position / thrust control
+    static const float MPC_TILT_MAX;
     static const float MPC_XY_P;
     static const float MPC_Z_P;
     static const float MPC_XY_VEL_P_ACC;
@@ -219,32 +289,45 @@ struct CONST_PARAM_FLOAT
     static const float MPC_XY_VEL_MAX;
     static const float MPC_Z_VEL_MAX_UP;
     static const float MPC_Z_VEL_MAX_DOWN;
+    static const float MPC_THR_HOVER;
     static const float MPC_THR_MIN;
     static const float MPC_THR_MAX;
     static const float MPC_THR_XY_MARGIN;
-    static const float MC_YAW_WEIGHT;
+    static const float MPC_VELD_LP;
+
+    // attitude / rate control
     static const float MC_ROLL_P;
     static const float MC_PITCH_P;
     static const float MC_YAW_P;
-    static const float MPC_THR_HOVER;
-    static const float MPC_VEL_LP;
-    static const float MPC_VELD_LP;
+    static const float MC_YAW_WEIGHT;
+    static const float MC_ROLLRATE_MAX;
+    static const float MC_PITCHRATE_MAX;
+    static const float MC_YAWRATE_MAX;
+    static const float ANGULAR_ACCEL_LP;
     static const float MC_ROLLRATE_P;
     static const float MC_PITCHRATE_P;
     static const float MC_YAWRATE_P;
+    static const float MC_ROLLRATE_K;
+    static const float MC_PITCHRATE_K;
+    static const float MC_YAWRATE_K;
     static const float MC_ROLLRATE_D;
     static const float MC_PITCHRATE_D;
     static const float MC_YAWRATE_D;
     static const float MC_ROLLRATE_I;
     static const float MC_PITCHRATE_I;
     static const float MC_YAWRATE_I;
-    static const float CA_ROTOR_KM[4];
-    static const float CA_ROTOR_CT[4];
+    static const float MC_ROLLRATE_FF;
+    static const float MC_PITCHRATE_FF;
+    static const float MC_YAWRATE_FF;
+    static const float MC_RR_INT_LIM;
+    static const float MC_PR_INT_LIM;
+    static const float MC_YR_INT_LIM;
+    static const float MC_YAW_TQ_CUTOFF;
+
+    static const float ARW_GAIN;
 
     static const float square_waypoints[_SQUARE_WAYPOINTS][3];
 
-    static const float ARW_GAIN;
-    
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
     static const float X_WALL;
     static const float WALL_NORMAL_VECTOR_X;
@@ -258,4 +341,12 @@ struct CONST_PARAM_FLOAT
     static const float INIT_TARGET_FY;
     static const float INIT_TARGET_FZ;
 #endif
+
+    // model switches
+    static const bool MPC_ACC_DECOUPLE;
+    static const int MOTOR_COMMAND_DELAY_STEPS;
+
+    // takeoff state
+    static const int TAKEOFF_STATE_RAMPUP;
+    static const int TAKEOFF_STATE_FLIGHT;
 };

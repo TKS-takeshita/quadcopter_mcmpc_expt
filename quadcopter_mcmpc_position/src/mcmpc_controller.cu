@@ -46,7 +46,6 @@ namespace qc_mcmpc
     __constant__ float mc_yaw_weight;
     __constant__ float lpf;
     __constant__ float mpc_thr_hover;
-    __constant__ float mpc_vel_lp;
     __constant__ float mpc_veld_lp;
     __constant__ float mc_rollrate_p;
     __constant__ float mc_pitchrate_p;
@@ -65,9 +64,44 @@ namespace qc_mcmpc
     __constant__ float prev_angular_acceleration_device[3];
     __constant__ float rate_int_device[3];
     __constant__ float prev_motor_speed_device[4];
-    __constant__ int prev_motor_speed_valid_device;
-    __constant__ float initial_rate_delay_buffer_device[3][3];
-    __constant__ float initial_acc_delay_buffer_device[3][3];
+    __constant__ int   prev_motor_speed_valid_device;
+
+    __constant__ float motor_input_scaling;
+    __constant__ float max_rot_velocity;
+    __constant__ float motor_time_constant_up;
+    __constant__ float motor_time_constant_down;
+    __constant__ float motor_thrust_constant;
+    __constant__ float moment_constant;
+
+    __constant__ float rotor_positions[4][3];
+    __constant__ float rotor_yaw_signs[4];
+    __constant__ float px4_quad_x_mix[4][4];
+    __constant__ float px4_quad_x_mix_inv[4][4];
+    __constant__ float px4_actuator_min[4];
+    __constant__ float px4_actuator_max[4];
+
+    __constant__ float angular_accel_lp;
+    __constant__ float mc_rollrate_k;
+    __constant__ float mc_pitchrate_k;
+    __constant__ float mc_yawrate_k;
+    __constant__ float mc_rollrate_ff;
+    __constant__ float mc_pitchrate_ff;
+    __constant__ float mc_yawrate_ff;
+    __constant__ float mc_rr_int_lim;
+    __constant__ float mc_pr_int_lim;
+    __constant__ float mc_yr_int_lim;
+    __constant__ float mc_yaw_tq_cutoff;
+
+    __constant__ float ca_minimum_yaw_margin;
+    __constant__ float linear_velocity_damping[3];
+    __constant__ float angular_velocity_damping[3];
+    __constant__ float body_torque_scale[3];
+    __constant__ float acceleration_bias_device[3];
+    __constant__ int   motor_command_delay_steps;
+
+    __constant__ int takeoff_state_rampup_device;
+    __constant__ int takeoff_state_flight_device;
+    __constant__ float mpc_tilt_max_device;
 
     target_state_t target_host;
 
@@ -83,20 +117,20 @@ namespace qc_mcmpc
 	__constant__ float control_period_device;
 	__constant__ float integration_step_size_device;
 
-		__constant__ float var_and_z_i_device[_N_OF_ODES + 1];
-		__constant__ input_array average_input_device;
-		__constant__ float sigma_k_device[4];
-        __constant__ int square_waypoint_index_device;
-        __constant__ float square_waypoint_change_time_device;
-        __constant__ float mcmpc_log_device;
-        __constant__ float square_waypoints_device[_SQUARE_WAYPOINTS][3];
-        __constant__ int takeoff_state_device;
-        __constant__ float takeoff_tilt_limit_device;
-        __constant__ int landed_device;
-        __constant__ int ground_contact_device;
-        __constant__ int maybe_landed_device;
+    __constant__ float var_and_z_i_device[_N_OF_ODES + 1];
+    __constant__ input_array average_input_device;
+    __constant__ float sigma_k_device[4];
+    __constant__ int square_waypoint_index_device;
+    __constant__ float square_waypoint_change_time_device;
+    __constant__ float mcmpc_log_device;
+    __constant__ float square_waypoints_device[_SQUARE_WAYPOINTS][3];
+    __constant__ int takeoff_state_device;
+    __constant__ float takeoff_tilt_limit_device;
+    __constant__ int landed_device;
+    __constant__ int ground_contact_device;
+    __constant__ int maybe_landed_device;
 
-		__global__ static void init_curand_seed(curandState *state_array, int seed);
+    __global__ static void init_curand_seed(curandState *state_array, int seed);
 	__global__ static void generate_input_samples_and_calc_costs(curandState *state, input_array* input_array_sample_device, float* cost_vec);
 	__global__ static void extract_elite_sample(input_array* src, input_array* dst, int* elite_indices);
 
@@ -213,7 +247,6 @@ namespace qc_mcmpc
         cudaMemcpyToSymbol( mc_yaw_weight,          &CONST_PARAM_FLOAT::MC_YAW_WEIGHT,       sizeof( float ) );
         cudaMemcpyToSymbol( lpf,                    &CONST_PARAM_FLOAT::LPF,                 sizeof( float ) );
         cudaMemcpyToSymbol( mpc_thr_hover,          &CONST_PARAM_FLOAT::MPC_THR_HOVER,       sizeof( float ) );
-        cudaMemcpyToSymbol( mpc_vel_lp,             &CONST_PARAM_FLOAT::MPC_VEL_LP,          sizeof( float ) );
         cudaMemcpyToSymbol( mpc_veld_lp,            &CONST_PARAM_FLOAT::MPC_VELD_LP,         sizeof( float ) );
         cudaMemcpyToSymbol( mc_rollrate_p,          &CONST_PARAM_FLOAT::MC_ROLLRATE_P,       sizeof( float ) );
         cudaMemcpyToSymbol( mc_pitchrate_p,         &CONST_PARAM_FLOAT::MC_PITCHRATE_P,      sizeof( float ) );
@@ -227,11 +260,52 @@ namespace qc_mcmpc
 
         cudaMemcpyToSymbol( control_period_device,        &CONST_PARAM_FLOAT::CONTROL_PERIOD,        sizeof( float ) );
         cudaMemcpyToSymbol( integration_step_size_device, &CONST_PARAM_FLOAT::INTEGRATION_STEP_SIZE, sizeof( float ) );
-        cudaMemcpyToSymbol( square_waypoints_device, CONST_PARAM_FLOAT::square_waypoints, sizeof(CONST_PARAM_FLOAT::square_waypoints) );
+
+        cudaMemcpyToSymbol( motor_input_scaling,          &CONST_PARAM_FLOAT::MOTOR_INPUT_SCALING,      sizeof(float));
+        cudaMemcpyToSymbol( max_rot_velocity,             &CONST_PARAM_FLOAT::MAX_ROT_VELOCITY,         sizeof(float));
+        cudaMemcpyToSymbol( motor_time_constant_up,       &CONST_PARAM_FLOAT::MOTOR_TIME_CONSTANT_UP,   sizeof(float));
+        cudaMemcpyToSymbol( motor_time_constant_down,     &CONST_PARAM_FLOAT::MOTOR_TIME_CONSTANT_DOWN, sizeof(float));
+        cudaMemcpyToSymbol( motor_thrust_constant,        &CONST_PARAM_FLOAT::MOTOR_THRUST_CONSTANT,    sizeof(float));
+        cudaMemcpyToSymbol( moment_constant,              &CONST_PARAM_FLOAT::MOMENT_CONSTANT,          sizeof(float));
+
+        cudaMemcpyToSymbol( rotor_positions,              CONST_PARAM_FLOAT::ROTOR_POSITIONS,            sizeof(CONST_PARAM_FLOAT::ROTOR_POSITIONS));
+        cudaMemcpyToSymbol( rotor_yaw_signs,              CONST_PARAM_FLOAT::ROTOR_YAW_SIGNS,            sizeof(CONST_PARAM_FLOAT::ROTOR_YAW_SIGNS));
+        cudaMemcpyToSymbol( px4_quad_x_mix,               CONST_PARAM_FLOAT::PX4_QUAD_X_MIX,             sizeof(CONST_PARAM_FLOAT::PX4_QUAD_X_MIX));
+        cudaMemcpyToSymbol( px4_quad_x_mix_inv,           CONST_PARAM_FLOAT::PX4_QUAD_X_MIX_INV,         sizeof(CONST_PARAM_FLOAT::PX4_QUAD_X_MIX_INV));
+        cudaMemcpyToSymbol( px4_actuator_min,             CONST_PARAM_FLOAT::PX4_ACTUATOR_MIN,           sizeof(CONST_PARAM_FLOAT::PX4_ACTUATOR_MIN));
+        cudaMemcpyToSymbol( px4_actuator_max,             CONST_PARAM_FLOAT::PX4_ACTUATOR_MAX,           sizeof(CONST_PARAM_FLOAT::PX4_ACTUATOR_MAX));
+
+        cudaMemcpyToSymbol( angular_accel_lp,            &CONST_PARAM_FLOAT::ANGULAR_ACCEL_LP,           sizeof(float));
+        cudaMemcpyToSymbol( mc_rollrate_k,               &CONST_PARAM_FLOAT::MC_ROLLRATE_K,              sizeof(float));
+        cudaMemcpyToSymbol( mc_pitchrate_k,              &CONST_PARAM_FLOAT::MC_PITCHRATE_K,             sizeof(float));
+        cudaMemcpyToSymbol( mc_yawrate_k,                &CONST_PARAM_FLOAT::MC_YAWRATE_K,               sizeof(float));
+        cudaMemcpyToSymbol( mc_rollrate_ff,              &CONST_PARAM_FLOAT::MC_ROLLRATE_FF,             sizeof(float));
+        cudaMemcpyToSymbol( mc_pitchrate_ff,             &CONST_PARAM_FLOAT::MC_PITCHRATE_FF,            sizeof(float));
+        cudaMemcpyToSymbol( mc_yawrate_ff,               &CONST_PARAM_FLOAT::MC_YAWRATE_FF,              sizeof(float));
+        cudaMemcpyToSymbol( mc_rr_int_lim,               &CONST_PARAM_FLOAT::MC_RR_INT_LIM,              sizeof(float));
+        cudaMemcpyToSymbol( mc_pr_int_lim,               &CONST_PARAM_FLOAT::MC_PR_INT_LIM,              sizeof(float));
+        cudaMemcpyToSymbol( mc_yr_int_lim,               &CONST_PARAM_FLOAT::MC_YR_INT_LIM,              sizeof(float));
+        cudaMemcpyToSymbol( mc_yaw_tq_cutoff,            &CONST_PARAM_FLOAT::MC_YAW_TQ_CUTOFF,           sizeof(float));
+
+        cudaMemcpyToSymbol( ca_minimum_yaw_margin,        &CONST_PARAM_FLOAT::CA_MINIMUM_YAW_MARGIN,     sizeof(float));
+        cudaMemcpyToSymbol( linear_velocity_damping,      CONST_PARAM_FLOAT::LINEAR_VELOCITY_DAMPING,    sizeof(CONST_PARAM_FLOAT::LINEAR_VELOCITY_DAMPING));
+        cudaMemcpyToSymbol( angular_velocity_damping,     CONST_PARAM_FLOAT::ANGULAR_VELOCITY_DAMPING,   sizeof(CONST_PARAM_FLOAT::ANGULAR_VELOCITY_DAMPING));
+        cudaMemcpyToSymbol( body_torque_scale,            CONST_PARAM_FLOAT::BODY_TORQUE_SCALE,          sizeof(CONST_PARAM_FLOAT::BODY_TORQUE_SCALE));
+        {
+            float acceleration_bias_init[3] = {0.0f, 0.0f, 0.0f};
+            cudaMemcpyToSymbol(acceleration_bias_device, acceleration_bias_init, sizeof(acceleration_bias_init));
+        }
+        cudaMemcpyToSymbol( motor_command_delay_steps,    &CONST_PARAM_FLOAT::MOTOR_COMMAND_DELAY_STEPS, sizeof(int));
+
+        cudaMemcpyToSymbol(takeoff_state_rampup_device, &CONST_PARAM_FLOAT::TAKEOFF_STATE_RAMPUP, sizeof(int));
+        cudaMemcpyToSymbol(takeoff_state_flight_device, &CONST_PARAM_FLOAT::TAKEOFF_STATE_FLIGHT, sizeof(int));
+        cudaMemcpyToSymbol(mpc_tilt_max_device, &CONST_PARAM_FLOAT::MPC_TILT_MAX, sizeof(float));
+
+        cudaMemcpyToSymbol( square_waypoints_device,    CONST_PARAM_FLOAT::square_waypoints,            sizeof(CONST_PARAM_FLOAT::square_waypoints) );
 
         {
-            int takeoff_state_init = 5;
-            float takeoff_tilt_limit_init = 0.78539816339f;
+            int takeoff_state_init = CONST_PARAM_FLOAT::TAKEOFF_STATE_FLIGHT;
+            float takeoff_tilt_limit_init = CONST_PARAM_FLOAT::MPC_TILT_MAX;
             int landed_init = 0;
             int ground_contact_init = 0;
             int maybe_landed_init = 0;
