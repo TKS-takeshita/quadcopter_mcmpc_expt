@@ -71,6 +71,66 @@ const double CONST_PARAM::MOTOR_THRUST_SCALE = 0.94266407904946;
 const double CONST_PARAM::MOTOR_THRUST_CONSTANT =CONST_PARAM::MOTOR_THRUST_CONSTANT_SDF * CONST_PARAM::MOTOR_THRUST_SCALE;
 const double CONST_PARAM::MOMENT_CONSTANT = 8.0e-8;
 
+const double CONST_PARAM::ROTOR_POSITIONS[4][3] = {
+    {0.180655, 0.180655, 0.0},
+    {-0.180655, -0.180655, 0.0},
+    {0.180655, -0.180655, 0.0},
+    {-0.180655, 0.180655, 0.0},
+};
+
+const double CONST_PARAM::ROTOR_YAW_SIGNS[4] = {
+    1.0,
+    1.0,
+    -1.0,
+    -1.0,
+};
+
+const double CONST_PARAM::PX4_QUAD_X_MIX[4][4] = {
+    {-0.70710678, 0.70710678, 1.0, -1.0},
+    {0.70710678, -0.70710678, 1.0, -1.0},
+    {0.70710678, 0.70710678, -1.0, -1.0},
+    {-0.70710678, -0.70710678, -1.0, -1.0},
+};
+
+const double CONST_PARAM::PX4_QUAD_X_MIX_INV[4][4] = {
+    {-0.35355339, 0.35355339, 0.35355339, -0.35355339},
+    {0.35355339, -0.35355339, 0.35355339, -0.35355339},
+    {0.25, 0.25, -0.25, -0.25},
+    {-0.25, -0.25, -0.25, -0.25},
+};
+
+const double CONST_PARAM::PX4_ACTUATOR_MIN[4] = {
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+};
+
+const double CONST_PARAM::PX4_ACTUATOR_MAX[4] = {
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+};
+
+const double CONST_PARAM::LINEAR_VELOCITY_DAMPING[3] = {
+    0.0,
+    0.0,
+    0.0,
+};
+
+const double CONST_PARAM::ANGULAR_VELOCITY_DAMPING[3] = {
+    0.0,
+    0.0,
+    0.0,
+};
+
+const double CONST_PARAM::BODY_TORQUE_SCALE[3] = {
+    1.0,
+    1.0,
+    1.0,
+};
+
 float mcmpc_log = 0.0f;
 
 #ifdef SIMULATION
