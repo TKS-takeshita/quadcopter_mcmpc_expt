@@ -1,7 +1,6 @@
 #pragma once
 
 #include <thrust/device_vector.h>
-#include <thrust/host_vector.h>
 #include "quadcopter_mcmpc_position/mcmpc_constants.cuh"
 
 enum decoupled_position
@@ -21,19 +20,18 @@ namespace qc_mcmpc
         mcmpc_controller();
         ~mcmpc_controller();
 
-        float calc_weighted_average_and_min_cost(float var_and_z_i[]);
+        float calc_weighted_average_and_min_cost();
 
         curandState *curand_state_array;
 
         input_array best_input_array;
         thrust::device_vector<input_array> input_array_device_vec;
 
-        // sort
-        thrust::device_vector<int> indices_device_vec;
         thrust::device_vector<float> cost_device_vec_for_sorting;
-
-        thrust::device_vector<input_array> input_array_device_vec_elite;
-        thrust::host_vector<input_array> input_array_host_vec_elite;
+        thrust::device_vector<float> topk_candidate_cost_device_vec;
+        thrust::device_vector<int> topk_candidate_index_device_vec;
+        thrust::device_vector<int> topk_index_device_vec;
+        thrust::device_vector<input_array> best_input_device_vec;
 
         float sigma_k[4];
 

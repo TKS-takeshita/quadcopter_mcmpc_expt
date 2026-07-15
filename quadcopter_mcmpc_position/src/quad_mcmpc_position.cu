@@ -568,32 +568,15 @@ namespace quad_sim_base
 
     // 現在状態からMCMPCを回し、そのときの最適入力を得る
     void do_simulation(float var_array_to_integrate[]){
-        float var_and_z_i_temp_float[_N_OF_ODES + 1];
-
-        // time measurement
-        struct timespec start_time;
-        struct timespec finish_time;
-        std::vector<long> process_time_buff;//時間測定しているが毎回消えるので後で修正
+        float var_and_z_i_temp_float[_N_OF_ODES];
 
         for(int i=0; i < _N_OF_ODES; i++)
             var_and_z_i_temp_float[i] = var_array_to_integrate[i];
-        var_and_z_i_temp_float[_N_OF_ODES] = 0.0f;
-
         // コンストラクタを実行するため、get_instance()
         qc_mcmpc::mcmpc_controller::get_instance();//mcmpc_controllerのインスタンス生成
 
-        // time measurement
-        clock_gettime(CLOCK_REALTIME, &start_time);
         cost = (mcmpc_controller::get_instance()).calc_optimal_input(var_and_z_i_temp_float, input1, input2, input3, input4);
         sum_cost += cost;
-
-        // time measurement
-        clock_gettime(CLOCK_REALTIME, &finish_time);
-
-        int sec = (int)(finish_time.tv_sec - start_time.tv_sec);
-        long ns = (long)(finish_time.tv_nsec - start_time.tv_nsec);
-
-        process_time_buff.push_back(((long)(sec * 1e9)) + ns);
     }
 }
 
@@ -638,12 +621,6 @@ int main(int argc, char *argv[])
     auto rate_ctrl_status_sub = node->create_subscription<px4_msgs::msg::RateCtrlStatus>("/fmu/out/rate_ctrl_status",qos,rate_ctrl_status_callback);
     auto torque_sp_sub = node->create_subscription<px4_msgs::msg::VehicleTorqueSetpoint>("/fmu/out/vehicle_torque_setpoint",qos,torque_setpoint_callback);
     auto actuator_motors_sub = node->create_subscription<px4_msgs::msg::ActuatorMotors>("/fmu/out/actuator_motors",qos,actuator_motors_callback);
-    float var_p_save[_DEVICE_CONST_HORIZON+1][_N_OF_ODES+1];
-    for(int i= 0; i<_DEVICE_CONST_HORIZON+1; i++) {
-        for(int j=0; j<_N_OF_ODES+1; j++){
-            var_p_save[i][j] = 0.0f;
-        }
-    }
     // csv.open(("/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_" + ([](){auto n=std::chrono::system_clock::now();std::time_t t=std::chrono::system_clock::to_time_t(n);std::tm tm;localtime_r(&t,&tm);std::ostringstream s;s<<std::put_time(&tm,"%Y%m%d_%H%M%S");return s.str();})() + ".csv"), std::ios::out);
     csv.open(("/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_position/csv/mcmpc_log_" + ([](){auto n=std::chrono::system_clock::now();std::time_t t=std::chrono::system_clock::to_time_t(n);std::tm tm;localtime_r(&t,&tm);std::ostringstream s;s<<std::put_time(&tm,"%Y%m%d_%H%M%S");return s.str();})() + ".csv"), std::ios::out);
     const char* names[_N_OF_ODES] = {

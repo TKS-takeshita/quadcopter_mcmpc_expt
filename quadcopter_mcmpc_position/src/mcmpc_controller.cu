@@ -1,13 +1,18 @@
 #include <iostream>
-#include <thrust/sequence.h>
-#include <thrust/sequence.h>
-#include <thrust/copy.h>
-#include <thrust/sort.h>
+#include <cmath>
 
 #include "mpc_simulator.cu"
 
 namespace qc_mcmpc
 {
+    static constexpr int TOPK_BLOCK_SIZE = 1024;
+    static constexpr int TOPK_SIZE = 100;
+    static constexpr int MCMPC_SAMPLE_COUNT =
+        _DEVICE_CONST_THREAD_PER_BLOCK * _DEVICE_CONST_N_OF_BLOCK;
+    static constexpr int TOPK_NUM_BLOCKS =
+        (MCMPC_SAMPLE_COUNT + TOPK_BLOCK_SIZE - 1) / TOPK_BLOCK_SIZE;
+    static constexpr int TOPK_CANDIDATE_COUNT = TOPK_NUM_BLOCKS * TOPK_SIZE;
+
     // 実体を定義（externを外す）
     __constant__ target_state_t target_state_device;
 
@@ -114,7 +119,7 @@ namespace qc_mcmpc
 	__constant__ float control_period_device;
 	__constant__ float integration_step_size_device;
 
-    __constant__ float var_and_z_i_device[_N_OF_ODES + 1];
+    __constant__ float var_and_z_i_device[_N_OF_ODES];
     __constant__ input_array average_input_device;
     __constant__ float sigma_k_device[4];
     __constant__ int square_waypoint_index_device;
@@ -129,10 +134,12 @@ namespace qc_mcmpc
 
     __global__ static void init_curand_seed(curandState *state_array, int seed);
 	__global__ static void generate_input_samples_and_calc_costs(curandState *state, input_array* input_array_sample_device, float* cost_vec);
-	__global__ static void extract_elite_sample(input_array* src, input_array* dst, int* elite_indices);
-
-	// コスト再計算用関数
-	static void input_constraint_cpu(float& rps_z, float& rps_wx, float& rps_wy, float& rps_ws);
+    __global__ static void select_block_topk(
+        const float* costs, int count, float* candidate_costs, int* candidate_indices);
+    __global__ static void select_final_topk(
+        const float* candidate_costs, const int* candidate_indices, int count, int* top_indices);
+    __global__ static void weighted_average_topk(
+        const input_array* samples, const float* costs, const int* top_indices, input_array* best_input);
 
     void update_target_state_device();
 
@@ -140,32 +147,11 @@ namespace qc_mcmpc
 	static float dot_vec_cpu(float v1_x, float v1_y, float v1_z, float v2_x, float v2_y, float v2_z);
 	static void cross_vec_cpu(float v1_x, float v1_y, float v1_z, float v2_x, float v2_y, float v2_z, float& v_ans_x, float& v_ans_y, float& v_ans_z);
 	static void inverse_3x3__cpu(float matrix_src[3][3], float ans[3][3]);
-	static void calculate_deviations_cpu(float var_and_z_i[], float var_p[], float rps_cw1, float rps_cw2, float rps_ccw1, float rps_ccw2, bool& col_flag, float v_plus[], float w_plus[]);
-#else
-	static void calculate_deviations_cpu(float var_and_z_i[], float var_p[], float rps_cw1, float rps_cw2, float rps_ccw1, float rps_ccw2);
 #endif
 
 // コンストラクタ
 	mcmpc_controller::mcmpc_controller()
 	{
-		// 目標状態の設定
-
-        target_host = {
-            CONST_PARAM_FLOAT::INIT_TARGET_E0,
-            CONST_PARAM_FLOAT::INIT_TARGET_E1,
-            CONST_PARAM_FLOAT::INIT_TARGET_E2,
-            CONST_PARAM_FLOAT::INIT_TARGET_E3,
-            CONST_PARAM_FLOAT::INIT_TARGET_WX,
-            CONST_PARAM_FLOAT::INIT_TARGET_WY,
-            CONST_PARAM_FLOAT::INIT_TARGET_WZ,
-            CONST_PARAM_FLOAT::INIT_TARGET_X,
-            CONST_PARAM_FLOAT::INIT_TARGET_Y,
-            CONST_PARAM_FLOAT::INIT_TARGET_Z,
-            CONST_PARAM_FLOAT::INIT_TARGET_XP,
-            CONST_PARAM_FLOAT::INIT_TARGET_YP,
-            CONST_PARAM_FLOAT::INIT_TARGET_ZP
-        };
-
 		// 分散の設定　（変数なのは分散固定化が暫定的措置であるため）
 		for(int i=0; i<4; i++)
 			sigma_k[i] = CONST_PARAM_FLOAT::SIGMA_CONST[i];
@@ -190,18 +176,14 @@ namespace qc_mcmpc
 		thrust::device_vector<input_array> input_vec_dev_temp(CONST_PARAM::N_OF_SAMPLES);
 		input_array_device_vec = input_vec_dev_temp;
 
-		thrust::device_vector<input_array> input_vec_dev_elite_temp(CONST_PARAM::N_OF_THE_USING_BEST);
-		input_array_device_vec_elite = input_vec_dev_elite_temp;
-
-		thrust::device_vector<int> indices_vec_dev_temp(CONST_PARAM::N_OF_SAMPLES);
-		indices_device_vec = indices_vec_dev_temp;
-
 		thrust::device_vector<float> cost_vec_dev_temp( CONST_PARAM::N_OF_SAMPLES );
 		cost_device_vec_for_sorting = cost_vec_dev_temp;
 
-		// host_vectorを生成
-		thrust::host_vector<input_array> input_vec_host_elite_temp( CONST_PARAM::N_OF_THE_USING_BEST );
-		input_array_host_vec_elite = input_vec_host_elite_temp;
+
+        topk_candidate_cost_device_vec.resize(TOPK_CANDIDATE_COUNT);
+        topk_candidate_index_device_vec.resize(TOPK_CANDIDATE_COUNT);
+        topk_index_device_vec.resize(TOPK_SIZE);
+        best_input_device_vec.resize(1);
 
 		//  __constant__ メモリに定数をコピー
 		cudaMemcpyToSymbol(target_state_device, &target_host, sizeof(target_state_t));
@@ -345,32 +327,159 @@ namespace qc_mcmpc
 		cost_vec[id] = input_array_sample_device[id].cost;
 	}
 
-    // エリートサンプルだけの入力列 devivce_vectorをGPUで生成 (ホストへの大量転送, ホストからのランダムアクセスを防ぐ)
-	__global__ static void extract_elite_sample(input_array* src, input_array* dst, int* elite_indices){
-		int id = blockDim.x * blockIdx.x + threadIdx.x;//blockDim.x = 1, threadIdx.x = 0
+    __device__ static bool topk_pair_greater(float lhs_cost, int lhs_index, float rhs_cost, int rhs_index)
+    {
+        return (lhs_cost > rhs_cost) ||
+            ((lhs_cost == rhs_cost) && (lhs_index > rhs_index));
+    }
 
-		dst[id].cost = src[elite_indices[id]].cost;
-		for(int i=0; i< _DEVICE_CONST_HORIZON; i++){
-			for(int j=0; j<4; j++){
-				dst[id].decoupled_position[i][j] = src[elite_indices[id]].decoupled_position[i][j];
-			}
-		}
-	}
+    __global__ static void select_block_topk(
+        const float* costs,
+        int count,
+        float* candidate_costs,
+        int* candidate_indices)
+    {
+        __shared__ float shared_cost[TOPK_BLOCK_SIZE];
+        __shared__ int shared_index[TOPK_BLOCK_SIZE];
 
-    static void input_constraint_cpu(float& rps_cw1, float& rps_cw2, float& rps_ccw1, float& rps_ccw2){
-		// rps_cw1
-		if(rps_cw1 > CONST_PARAM_FLOAT::U_UPPER_LIM) rps_cw1 = CONST_PARAM_FLOAT::U_UPPER_LIM;
-		if(rps_cw1 < CONST_PARAM_FLOAT::U_LOWER_LIM) rps_cw1 = CONST_PARAM_FLOAT::U_LOWER_LIM;
-		// rps_cw2
-		if(rps_cw2 > CONST_PARAM_FLOAT::U_UPPER_LIM) rps_cw2 = CONST_PARAM_FLOAT::U_UPPER_LIM;
-		if(rps_cw2 < CONST_PARAM_FLOAT::U_LOWER_LIM) rps_cw2 = CONST_PARAM_FLOAT::U_LOWER_LIM;
-		// rps_ccw1
-		if(rps_ccw1 > CONST_PARAM_FLOAT::U_UPPER_LIM) rps_ccw1 = CONST_PARAM_FLOAT::U_UPPER_LIM;
-		if(rps_ccw1 < CONST_PARAM_FLOAT::U_LOWER_LIM) rps_ccw1 = CONST_PARAM_FLOAT::U_LOWER_LIM;
-		// rps_ccw2
-		if(rps_ccw2 > CONST_PARAM_FLOAT::U_UPPER_LIM) rps_ccw2 = CONST_PARAM_FLOAT::U_UPPER_LIM;
-		if(rps_ccw2 < CONST_PARAM_FLOAT::U_LOWER_LIM) rps_ccw2 = CONST_PARAM_FLOAT::U_LOWER_LIM;
-	}
+        const int tid = threadIdx.x;
+        const int global_index = blockIdx.x * TOPK_BLOCK_SIZE + tid;
+        float cost = (global_index < count) ? costs[global_index] : INFINITY;
+        if (!isfinite(cost)) {
+            cost = INFINITY;
+        }
+        shared_cost[tid] = cost;
+        shared_index[tid] = (global_index < count) ? global_index : 0x7fffffff;
+        __syncthreads();
+
+        // 1024件をコスト、同値時はインデックスで昇順に並べる。
+        for (int size = 2; size <= TOPK_BLOCK_SIZE; size <<= 1) {
+            for (int stride = size >> 1; stride > 0; stride >>= 1) {
+                const int other = tid ^ stride;
+                if (other > tid) {
+                    const bool ascending = (tid & size) == 0;
+                    const bool greater = topk_pair_greater(
+                        shared_cost[tid], shared_index[tid],
+                        shared_cost[other], shared_index[other]);
+                    if (greater == ascending) {
+                        const float tmp_cost = shared_cost[tid];
+                        const int tmp_index = shared_index[tid];
+                        shared_cost[tid] = shared_cost[other];
+                        shared_index[tid] = shared_index[other];
+                        shared_cost[other] = tmp_cost;
+                        shared_index[other] = tmp_index;
+                    }
+                }
+                __syncthreads();
+            }
+        }
+
+        if (tid < TOPK_SIZE) {
+            const int output = blockIdx.x * TOPK_SIZE + tid;
+            candidate_costs[output] = shared_cost[tid];
+            candidate_indices[output] = shared_index[tid];
+        }
+    }
+
+    __global__ static void select_final_topk(
+        const float* candidate_costs,
+        const int* candidate_indices,
+        int count,
+        int* top_indices)
+    {
+        __shared__ float shared_cost[TOPK_BLOCK_SIZE];
+        __shared__ int shared_index[TOPK_BLOCK_SIZE];
+
+        const int tid = threadIdx.x;
+        float cost = (tid < count) ? candidate_costs[tid] : INFINITY;
+        if (!isfinite(cost)) {
+            cost = INFINITY;
+        }
+        shared_cost[tid] = cost;
+        shared_index[tid] = (tid < count) ? candidate_indices[tid] : 0x7fffffff;
+        __syncthreads();
+
+        for (int size = 2; size <= TOPK_BLOCK_SIZE; size <<= 1) {
+            for (int stride = size >> 1; stride > 0; stride >>= 1) {
+                const int other = tid ^ stride;
+                if (other > tid) {
+                    const bool ascending = (tid & size) == 0;
+                    const bool greater = topk_pair_greater(
+                        shared_cost[tid], shared_index[tid],
+                        shared_cost[other], shared_index[other]);
+                    if (greater == ascending) {
+                        const float tmp_cost = shared_cost[tid];
+                        const int tmp_index = shared_index[tid];
+                        shared_cost[tid] = shared_cost[other];
+                        shared_index[tid] = shared_index[other];
+                        shared_cost[other] = tmp_cost;
+                        shared_index[other] = tmp_index;
+                    }
+                }
+                __syncthreads();
+            }
+        }
+
+        if (tid < TOPK_SIZE) {
+            top_indices[tid] = shared_index[tid];
+        }
+    }
+
+    __global__ static void weighted_average_topk(
+        const input_array* samples,
+        const float* costs,
+        const int* top_indices,
+        input_array* best_input)
+    {
+        __shared__ float reduction[128];
+        __shared__ float weights[TOPK_SIZE];
+        const int tid = threadIdx.x;
+
+        float cost = 0.0f;
+        if (tid < TOPK_SIZE) {
+            cost = costs[top_indices[tid]];
+        }
+        reduction[tid] = cost;
+        __syncthreads();
+        for (int stride = 64; stride > 0; stride >>= 1) {
+            if (tid < stride) {
+                reduction[tid] += reduction[tid + stride];
+            }
+            __syncthreads();
+        }
+        const float lambda = reduction[0] / static_cast<float>(TOPK_SIZE);
+
+        const float weight = (tid < TOPK_SIZE)
+            ? expf(-cost / lambda)
+            : 0.0f;
+        if (tid < TOPK_SIZE) {
+            weights[tid] = weight;
+        }
+        reduction[tid] = weight;
+        __syncthreads();
+        for (int stride = 64; stride > 0; stride >>= 1) {
+            if (tid < stride) {
+                reduction[tid] += reduction[tid + stride];
+            }
+            __syncthreads();
+        }
+        const float weight_sum = reduction[0];
+
+        constexpr int input_count = _DEVICE_CONST_HORIZON * 4;
+        for (int element = tid; element < input_count; element += blockDim.x) {
+            float weighted_sum = 0.0f;
+            const int horizon_index = element / 4;
+            const int input_index = element % 4;
+            for (int elite = 0; elite < TOPK_SIZE; elite++) {
+                weighted_sum += samples[top_indices[elite]].decoupled_position[horizon_index][input_index]
+                    * weights[elite];
+            }
+            best_input->decoupled_position[horizon_index][input_index] = weighted_sum / weight_sum;
+        }
+        if (tid == 0) {
+            best_input->cost = 0.0f;
+        }
+    }
 
     void update_target_state_device()
     {
@@ -386,51 +495,32 @@ namespace qc_mcmpc
         }
     }
 
-    float mcmpc_controller::calc_weighted_average_and_min_cost(float var_and_z_i[])
+    float mcmpc_controller::calc_weighted_average_and_min_cost()
 	{
-		// 0, 1, 2, ... となる昇順インデックスを生成
-        thrust::sequence( indices_device_vec.begin(), indices_device_vec.end() );
+        static_assert(TOPK_SIZE == 100, "TOPK_SIZE must match N_OF_THE_USING_BEST");
+        select_block_topk<<<TOPK_NUM_BLOCKS, TOPK_BLOCK_SIZE>>>(
+            thrust::raw_pointer_cast(cost_device_vec_for_sorting.data()),
+            CONST_PARAM::N_OF_SAMPLES,
+            thrust::raw_pointer_cast(topk_candidate_cost_device_vec.data()),
+            thrust::raw_pointer_cast(topk_candidate_index_device_vec.data()));
+        select_final_topk<<<1, TOPK_BLOCK_SIZE>>>(
+            thrust::raw_pointer_cast(topk_candidate_cost_device_vec.data()),
+            thrust::raw_pointer_cast(topk_candidate_index_device_vec.data()),
+            TOPK_CANDIDATE_COUNT,
+            thrust::raw_pointer_cast(topk_index_device_vec.data()));
+        weighted_average_topk<<<1, 128>>>(
+            thrust::raw_pointer_cast(input_array_device_vec.data()),
+            thrust::raw_pointer_cast(cost_device_vec_for_sorting.data()),
+            thrust::raw_pointer_cast(topk_index_device_vec.data()),
+            thrust::raw_pointer_cast(best_input_device_vec.data()));
 
-		// cost_device_vec_for_sortingを昇順にインデックスをソート
-        thrust::sort_by_key( cost_device_vec_for_sorting.begin(), cost_device_vec_for_sorting.end(), indices_device_vec.begin() );
-
-		// input_array_device_vec 中からエリートサンプルのみをホストにコピー，input_array_host_vec_elite はソート済みの配列となる
-        extract_elite_sample<<< CONST_PARAM::N_OF_THE_USING_BEST, 1 >>>( thrust::raw_pointer_cast( input_array_device_vec.data() ), thrust::raw_pointer_cast( input_array_device_vec_elite.data() ), thrust::raw_pointer_cast( indices_device_vec.data() ) );
-        input_array_host_vec_elite = input_array_device_vec_elite;
-
-		// コストを正規化するためのλを計算（expが0にならないための処理）
-        float lambda = 0.0f;
-
-        for ( int n = 0; n < CONST_PARAM::N_OF_THE_USING_BEST; n++ )
-            lambda += input_array_host_vec_elite[n].cost;
-        lambda /= (float)CONST_PARAM::N_OF_THE_USING_BEST;
-
-		// 加重平均を計算
-        float weight_temp;
-        float sum_of_weight = 0.0f;
-
-        for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ ){
-            for ( int j = 0; j < 4; j++ )
-                best_input_array.decoupled_position[i][j] = 0.0f;
-        }
-        for ( int n = 0; n < CONST_PARAM::N_OF_THE_USING_BEST; n++ )
-        {
-            weight_temp = exp( -input_array_host_vec_elite[n].cost / lambda );
-            sum_of_weight += weight_temp;
-
-            for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
-                for ( int j = 0; j < 4; j++ )
-                    best_input_array.decoupled_position[i][j] += input_array_host_vec_elite[n].decoupled_position[i][j] * weight_temp;
-        }
-
-        for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
-            for ( int j = 0; j < 4; j++ )
-                best_input_array.decoupled_position[i][j] /= sum_of_weight;
-
-		//
-        // 加重平均された入力列に対してコスト関数を再計算
-        best_input_array.cost = 0.0f;
-		return best_input_array.cost;
+        // CPUへ戻すのは平均後の1入力列のみ。elite 100入力列はGPU内で完結する。
+        cudaMemcpy(
+            &best_input_array,
+            thrust::raw_pointer_cast(best_input_device_vec.data()),
+            sizeof(input_array),
+            cudaMemcpyDeviceToHost);
+        return best_input_array.cost;
 	}
 
     // 最初に get_instance() が呼ばれたときに唯一のインスタンスを生成し，以降はそれを保持（シングルトン）
@@ -445,7 +535,7 @@ namespace qc_mcmpc
 		float min_cost = std::numeric_limits<float>::infinity();
 
 		// 変数のコピー
-        cudaMemcpyToSymbol( var_and_z_i_device, var_and_z_i, (_N_OF_ODES +1) * sizeof( float ) );
+        cudaMemcpyToSymbol( var_and_z_i_device, var_and_z_i, _N_OF_ODES * sizeof( float ) );
 
 		// インプットシフト
         for ( int i = 0; i < _DEVICE_CONST_HORIZON - 1; i++ )
@@ -466,9 +556,7 @@ namespace qc_mcmpc
             
             generate_input_samples_and_calc_costs<<< _DEVICE_CONST_N_OF_BLOCK, _DEVICE_CONST_THREAD_PER_BLOCK >>>( curand_state_array, thrust::raw_pointer_cast( input_array_device_vec.data() ), thrust::raw_pointer_cast( cost_device_vec_for_sorting.data() ) );
 
-            cudaDeviceSynchronize();
-
-            min_cost = calc_weighted_average_and_min_cost( var_and_z_i );
+            min_cost = calc_weighted_average_and_min_cost();
         }
 
 		// PIDカスケード用修正　入力：スラスト＋姿勢

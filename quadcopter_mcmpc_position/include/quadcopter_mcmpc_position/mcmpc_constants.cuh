@@ -116,7 +116,7 @@ namespace qc_mcmpc{
     extern __constant__ int prev_motor_speed_valid_device;
 
     // __constant__ GPUのconstantメモリ（各制御周期ごとにCPUから更新）
-    extern __constant__ float var_and_z_i_device[_N_OF_ODES + 1];
+    extern __constant__ float var_and_z_i_device[_N_OF_ODES];
     extern __constant__ input_array average_input_device;
     extern __constant__ float sigma_k_device[4];
     extern __constant__ int square_waypoint_index_device;

@@ -287,8 +287,8 @@ namespace qc_mcmpc
         cost = 0.0f;
 
         // __constant__ メモリから状態量をコピー
-        float var_and_z_i_temp[_N_OF_ODES + 1];
-        for ( int i = 0; i < _N_OF_ODES + 1; i++ )
+        float var_and_z_i_temp[_N_OF_ODES];
+        for ( int i = 0; i < _N_OF_ODES; i++ )
             var_and_z_i_temp[i] = var_and_z_i_device[i];
         
         // 衝突予測用変数
@@ -353,6 +353,49 @@ namespace qc_mcmpc
         float square_waypoint_threshold_sq =
             _SQUARE_WAYPOINT_THRESHOLD * _SQUARE_WAYPOINT_THRESHOLD;
 
+        // ホライズン内で変化しない制御・モデル係数はサンプルごとに一度だけ計算する。
+        const bool flying = takeoff_state_device >= takeoff_state_flight_device;
+        const bool landed_or_maybe_landed = landed_device || maybe_landed_device;
+        const bool flying_but_ground_contact = flying && (ground_contact_device || maybe_landed_device);
+        const bool no_thrust = (takeoff_state_device < takeoff_state_rampup_device) || flying_but_ground_contact;
+        const float thrust_min = flying ? mpc_thr_min : 0.0f;
+
+        float tilt_limit = takeoff_tilt_limit_device;
+        if (!isfinite(tilt_limit) || tilt_limit <= 0.0f) {
+            tilt_limit = mpc_tilt_max_device;
+        }
+        const float sin_tilt_limit = sinf(tilt_limit);
+        const float cos_tilt_limit = cosf(tilt_limit);
+
+        float hover_thrust = mpc_thr_hover;
+        if (!isfinite(hover_thrust) || hover_thrust < 1.0e-6f) {
+            hover_thrust = 0.60f;
+        }
+        const float hover_over_gravity = hover_thrust / a_of_gravity_device;
+        const float gravity_over_hover = a_of_gravity_device / hover_thrust;
+        const float thrust_max_squared = mpc_thr_max * mpc_thr_max;
+
+        const float vel_dot_alpha = (mpc_veld_lp > 1.0e-6f)
+            ? control_period_device / (control_period_device + 1.0f / (2.0f * M_PI * mpc_veld_lp))
+            : 1.0f;
+        const float omega_dot_lpf_alpha = (angular_accel_lp > 1.0e-6f)
+            ? control_period_device / (control_period_device + 1.0f / (2.0f * M_PI * angular_accel_lp))
+            : 1.0f;
+        const float yaw_alpha = (mc_yaw_tq_cutoff > 1.0e-6f)
+            ? control_period_device / (control_period_device + 1.0f / (2.0f * M_PI * mc_yaw_tq_cutoff))
+            : 1.0f;
+        const float yaw_gain = (mc_yaw_weight > 1.0e-4f) ? (mc_yaw_p / mc_yaw_weight) : mc_yaw_p;
+        const float rate_i_gain[3] = {
+            mc_rollrate_k * mc_rollrate_i,
+            mc_pitchrate_k * mc_pitchrate_i,
+            mc_yawrate_k * mc_yawrate_i,
+        };
+        const float rate_int_lim[3] = {mc_rr_int_lim, mc_pr_int_lim, mc_yr_int_lim};
+        const float motor_alpha_up = expf(
+            -control_period_device / fmaxf(motor_time_constant_up, 1.0e-9f));
+        const float motor_alpha_down = expf(
+            -control_period_device / fmaxf(motor_time_constant_down, 1.0e-9f));
+
         // 内部で位置/ヨー入力からsetpointを計算し，同定済み離散モデルで状態遷移する
         for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
         {
@@ -361,20 +404,6 @@ namespace qc_mcmpc
             float y_ref   = decoupled_position[i][y];
             float z_ref   = decoupled_position[i][z];
             float yaw_ref = decoupled_position[i][yaw];
-            bool flying = takeoff_state_device >= takeoff_state_flight_device;
-            bool landed_or_maybe_landed = landed_device || maybe_landed_device;
-            bool flying_but_ground_contact = flying && (ground_contact_device || maybe_landed_device);
-            bool no_thrust = (takeoff_state_device < takeoff_state_rampup_device) || flying_but_ground_contact;
-            float thrust_min = flying ? mpc_thr_min : 0.0f;
-            float tilt_limit = takeoff_tilt_limit_device;
-            if (!isfinite(tilt_limit) || tilt_limit <= 0.0f) {
-                tilt_limit = mpc_tilt_max_device;
-            }
-            float hover_thrust = mpc_thr_hover;
-            if (!isfinite(hover_thrust) || hover_thrust < 1.0e-6f) {
-                hover_thrust = 0.60f;
-            }
-
             vel_setpoint[0] = mpc_xy_p * (x_ref - var_and_z_i_temp[7]);
             vel_setpoint[1] = mpc_xy_p * (y_ref - var_and_z_i_temp[8]);
             vel_setpoint[2] = mpc_z_p  * (z_ref - var_and_z_i_temp[9]);
@@ -395,13 +424,6 @@ namespace qc_mcmpc
             float vel_dot_y = (var_and_z_i_temp[11] - prev_vel[1]) / control_period_device;
             float vel_dot_z = (var_and_z_i_temp[12] - prev_vel[2]) / control_period_device;
 
-            float vel_dot_alpha;
-            if (mpc_veld_lp > 1.0e-6f) {
-                vel_dot_alpha = control_period_device / (control_period_device + 1.0f / (2.0f * M_PI * mpc_veld_lp));
-            } else {
-                vel_dot_alpha = 1.0f;
-            }
-
             float vel_dot_lpf[3];
             vel_dot_lpf[0] = prev_acc[0] + vel_dot_alpha * (vel_dot_x - prev_acc[0]);
             vel_dot_lpf[1] = prev_acc[1] + vel_dot_alpha * (vel_dot_y - prev_acc[1]);
@@ -421,9 +443,8 @@ namespace qc_mcmpc
             body_z[1] *= bz_norm_inv;
             body_z[2] *= bz_norm_inv;
 
-            float dot_z = fminf(fmaxf(body_z[2], -1.0f), 1.0f);
-            float tilt_angle = acosf(dot_z);
-            if (tilt_angle > tilt_limit) {
+            // acosf(body_z[2]) > tilt_limit と同値の単調比較。
+            if (body_z[2] < cos_tilt_limit) {
                 float rejection[3];
                 rejection[0] = body_z[0];
                 rejection[1] = body_z[1];
@@ -436,9 +457,9 @@ namespace qc_mcmpc
                 }
                 rejection[0] /= rejection_norm;
                 rejection[1] /= rejection_norm;
-                body_z[0] = sinf(tilt_limit) * rejection[0];
-                body_z[1] = sinf(tilt_limit) * rejection[1];
-                body_z[2] = cosf(tilt_limit);
+                body_z[0] = sin_tilt_limit * rejection[0];
+                body_z[1] = sin_tilt_limit * rejection[1];
+                body_z[2] = cos_tilt_limit;
             }
 
             if (no_thrust) {
@@ -447,7 +468,7 @@ namespace qc_mcmpc
                 acc_setpoint[2] = 100.0f;
             }
 
-            float thrust_ned_z = acc_setpoint[2] * (hover_thrust / a_of_gravity_device) - hover_thrust;
+            float thrust_ned_z = acc_setpoint[2] * hover_over_gravity - hover_thrust;
             float cos_ned_body = body_z[2];
             if (fabsf(cos_ned_body) < 1.0e-6f) cos_ned_body = 1.0e-6f;
 
@@ -463,7 +484,6 @@ namespace qc_mcmpc
 
             // mcmpc_viewer と同じ thrust saturation
             float thrust_sp_xy_norm = sqrtf(thrust_setpoint[0]*thrust_setpoint[0] + thrust_setpoint[1]*thrust_setpoint[1]);
-            float thrust_max_squared = mpc_thr_max * mpc_thr_max;
             float allocated_horizontal_thrust = fminf(thrust_sp_xy_norm, mpc_thr_xy_margin);
             float thrust_z_max_squared = thrust_max_squared - allocated_horizontal_thrust * allocated_horizontal_thrust;
             thrust_setpoint[2] = fmaxf(thrust_setpoint[2], -sqrtf(fmaxf(0.0f, thrust_z_max_squared)));
@@ -476,8 +496,8 @@ namespace qc_mcmpc
             }
 
             float acc_sp_xy_produced[2];
-            acc_sp_xy_produced[0] = thrust_setpoint[0] * (a_of_gravity_device / hover_thrust);
-            acc_sp_xy_produced[1] = thrust_setpoint[1] * (a_of_gravity_device / hover_thrust);
+            acc_sp_xy_produced[0] = thrust_setpoint[0] * gravity_over_hover;
+            acc_sp_xy_produced[1] = thrust_setpoint[1] * gravity_over_hover;
 
             float vel_error_for_int[3];
             vel_error_for_int[0] = vel_error[0];
@@ -655,7 +675,6 @@ namespace qc_mcmpc
                 qe[2] = -qe[2];
                 qe[3] = -qe[3];
             }
-            float yaw_gain = (mc_yaw_weight > 1.0e-4f) ? (mc_yaw_p / mc_yaw_weight) : mc_yaw_p;
             omega_setpoint[0] = 2.0f * qe[1] * mc_roll_p;
             omega_setpoint[1] = 2.0f * qe[2] * mc_pitch_p;
             omega_setpoint[2] = 2.0f * qe[3] * yaw_gain;
@@ -685,14 +704,6 @@ namespace qc_mcmpc
                 (w_prev[2] - prev_omega[2]) / control_period_device,
             };
 
-            float omega_dot_lpf_alpha;
-            if (angular_accel_lp > 1.0e-6f) {
-                omega_dot_lpf_alpha = control_period_device /
-                    (control_period_device + 1.0f / (2.0f * M_PI * angular_accel_lp));
-            } else {
-                omega_dot_lpf_alpha = 1.0f;
-            }
-
             float omega_dot[3] = {
                 prev_omega_dot[0] + omega_dot_lpf_alpha * (raw_omega_dot[0] - prev_omega_dot[0]),
                 prev_omega_dot[1] + omega_dot_lpf_alpha * (raw_omega_dot[1] - prev_omega_dot[1]),
@@ -711,9 +722,6 @@ namespace qc_mcmpc
             };
 
             if (mc_yaw_tq_cutoff > 1.0e-6f) {
-                float yaw_alpha = control_period_device /
-                    (control_period_device + 1.0f / (2.0f * M_PI * mc_yaw_tq_cutoff));
-
                 if (!yaw_torque_lpf_initialized) {
                     yaw_torque_lpf_state = torque_setpoint[2];
                     yaw_torque_lpf_initialized = true;
@@ -726,12 +734,6 @@ namespace qc_mcmpc
                 yaw_torque_lpf_initialized = true;
             }
 
-            float rate_i_gain[3] = {
-                mc_rollrate_k * mc_rollrate_i,
-                mc_pitchrate_k * mc_pitchrate_i,
-                mc_yawrate_k * mc_yawrate_i,
-            };
-            float rate_int_lim[3] = {mc_rr_int_lim, mc_pr_int_lim, mc_yr_int_lim};
             if (!landed_or_maybe_landed) {
                 for (int axis = 0; axis < 3; axis++) {
                     float err_for_int = rate_error[axis];
@@ -761,10 +763,9 @@ namespace qc_mcmpc
                     motor_speed[m] = motor_speed_ref;
                 } else {
                     float prev_speed = fminf(fmaxf(motor_speed_state[m], 0.0f), max_rot_velocity);
-                    float motor_tau = (motor_speed_ref > prev_speed)
-                        ? motor_time_constant_up
-                        : motor_time_constant_down;
-                    float motor_alpha = expf(-control_period_device / fmaxf(motor_tau, 1.0e-9f));
+                    float motor_alpha = (motor_speed_ref > prev_speed)
+                        ? motor_alpha_up
+                        : motor_alpha_down;
                     motor_speed[m] = motor_alpha * prev_speed + (1.0f - motor_alpha) * motor_speed_ref;
                 }
                 motor_speed_state[m] = motor_speed[m];
@@ -858,8 +859,6 @@ namespace qc_mcmpc
             var_and_z_i_temp[5] = w_next[1];
             var_and_z_i_temp[6] = w_next[2];
 
-            var_and_z_i_temp[_N_OF_ODES] += var_and_z_i_temp[9] * control_period_device;
-
             // 衝突予測がONのとき，速度と角速度を上書きする
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
             if ( col_flag )
@@ -929,7 +928,6 @@ namespace qc_mcmpc
                  +  _COST_Q_VREF_X*(var_and_z_i_temp[10]-vel_ref_cost[0])*(var_and_z_i_temp[10]-vel_ref_cost[0]) + _COST_Q_VREF_Y*(var_and_z_i_temp[11]-vel_ref_cost[1])*(var_and_z_i_temp[11]-vel_ref_cost[1]) + _COST_Q_VREF_Z*(var_and_z_i_temp[12]-vel_ref_cost[2])*(var_and_z_i_temp[12]-vel_ref_cost[2])
                  +  _COST_Q_E1*(var_and_z_i_temp[1] -target_state_device.e1)*(var_and_z_i_temp[1] -target_state_device.e1)+ _COST_Q_E2*(var_and_z_i_temp[2] -target_state_device.e2)*(var_and_z_i_temp[2] -target_state_device.e2)+ _COST_Q_E3*(var_and_z_i_temp[3] -target_state_device.e3)*(var_and_z_i_temp[3] -target_state_device.e3)         // e1, e2, e3
                  +  _COST_Q_WX*(var_and_z_i_temp[4] -target_state_device.wx)*(var_and_z_i_temp[4] -target_state_device.wx)+ _COST_Q_WY*(var_and_z_i_temp[5] -target_state_device.wy)*(var_and_z_i_temp[5] -target_state_device.wy)+ _COST_Q_WZ*(var_and_z_i_temp[6] -target_state_device.wz)*(var_and_z_i_temp[6] -target_state_device.wz)          // wx, wy, wz
-                 +  _COST_Q_ZI*var_and_z_i_temp[_N_OF_ODES]*var_and_z_i_temp[_N_OF_ODES]                                                                                                  // z_i
                  +  _COST_R_X*(decoupled_position[i][x]-pred_target_x)*(decoupled_position[i][x]-pred_target_x)
                  +  _COST_R_Y*(decoupled_position[i][y]-pred_target_y)*(decoupled_position[i][y]-pred_target_y)
                  +  _COST_R_Z*(decoupled_position[i][z]-pred_target_z)*(decoupled_position[i][z]-pred_target_z)

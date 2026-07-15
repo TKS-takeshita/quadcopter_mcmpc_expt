@@ -41,7 +41,6 @@
 #   vel_x, vel_y, vel_z
 #   angular_vel_x, angular_vel_y, angular_vel_z
 #
-#
 import argparse
 import copy
 import os
@@ -54,7 +53,7 @@ import matplotlib.pyplot as plt
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib/")
 warnings.filterwarnings("ignore", message="Unable to import Axes3D.*", category=UserWarning, )
 
-DEFAULT_CSV = "/home/kt182/ws_mcmpc/src/quadcopter_mcmpc_expt/visualize_mcmpc/csv/offboard_control_log_real_sin_x.csv"
+DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/visualize_mcmpc/csv/offboard_control_log_real_sin_x.csv"
 
 SIMULATION = False
 # prediction mode values:
