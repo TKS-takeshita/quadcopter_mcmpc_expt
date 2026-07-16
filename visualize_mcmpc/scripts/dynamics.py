@@ -53,7 +53,7 @@ import matplotlib.pyplot as plt
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib/")
 warnings.filterwarnings("ignore", message="Unable to import Axes3D.*", category=UserWarning, )
 
-DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/visualize_mcmpc/csv/offboard_control_log_real_sin_x.csv"
+DEFAULT_CSV = "/home/kt182/ws_mcmpc/src/quadcopter_mcmpc_expt/visualize_mcmpc/csv/offboard_control_log_real_sin_x.csv"
 
 SIMULATION = False
 # prediction mode values:
@@ -247,11 +247,9 @@ PX4_QUAD_X_MIX_INV = np.linalg.inv(PX4_QUAD_X_MIX)
 # actuator min and max value for PX4
 PX4_ACTUATOR_MIN            = np.zeros(4, dtype=float)
 PX4_ACTUATOR_MAX            = np.ones(4, dtype=float)
-# thrust coefficient
-MOTOR_THRUST_CONSTANT_SDF   = 1.09e-5
-MOTOR_THRUST_SCALE          = 0.94266407904946
-MOTOR_THRUST_CONSTANT       = MOTOR_THRUST_CONSTANT_SDF * MOTOR_THRUST_SCALE
-# torque coefficient
+# thrust coefficient 1.0792e-5
+MOTOR_THRUST_CONSTANT       = 1.0792e-5
+# torque coefficient 8.0e-8
 MOMENT_CONSTANT             = 8.0e-8
 
 ZERO3 = np.zeros(3, dtype=float)
