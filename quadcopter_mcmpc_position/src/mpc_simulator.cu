@@ -189,7 +189,8 @@ namespace qc_mcmpc
 
     __device__ static float motor_speed_ref_from_setpoint_device(float motor_setpoint)
     {
-        float ref = fminf(fmaxf(motor_setpoint, 0.0f), 1.0f) * motor_input_scaling;
+        float u = fminf(fmaxf(motor_setpoint, 0.0f), 1.0f);
+        float ref = 1528.43944677f * u - 406.61258522f * u * u;
         return fminf(fmaxf(ref, 0.0f), max_rot_velocity);
     }
 

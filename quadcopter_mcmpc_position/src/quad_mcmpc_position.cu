@@ -150,7 +150,7 @@ void sin_cosf(float x, float* s, float* c){
 static float motor_speed_ref_from_setpoint_host(float actuator)
 {
     actuator = fminf(fmaxf(actuator, 0.0f), 1.0f);
-    float ref = actuator * CONST_PARAM_FLOAT::MOTOR_INPUT_SCALING;
+    float ref = 1528.43944677f * actuator - 406.61258522f * actuator * actuator;
     return fminf(fmaxf(ref, 0.0f), CONST_PARAM_FLOAT::MAX_ROT_VELOCITY);
 }
 

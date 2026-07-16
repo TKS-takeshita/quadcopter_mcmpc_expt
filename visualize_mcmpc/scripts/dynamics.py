@@ -169,10 +169,10 @@ if SIMULATION:
     MC_YAW_TQ_CUTOFF            = 2.0
     DRONE_MASS                  = 2.3
     DRONE_INERTIA               = np.diag([0.0418, 0.04226, 0.05619])
-    # MOTOR MODEL: PX4/Gazebo SDF model
-    MOTOR_SPEED_MODEL           = "linear"
+    # MOTOR MODEL: quadratic motor setpoint to rad/s approximation
+    MOTOR_SPEED_MODEL           = "quadratic"
     MOTOR_INPUT_SCALING         = 1000.0 #SDF input_scaling: actuator motorからrad/sへのスケーリング
-    MAX_ROT_VELOCITY            = 1120.0 #SDF maxRotVelocity [rad/s]
+    MAX_ROT_VELOCITY            = 1121.83 #SDF maxRotVelocity [rad/s]
     MOTOR_TIME_CONSTANT_UP      = 0.0125 #SDF timeConstantUp
     MOTOR_TIME_CONSTANT_DOWN    = 0.025 #SDF timeConstantDown
 else:
@@ -223,10 +223,10 @@ else:
     DRONE_MASS = 1.62
     DRONE_INERTIA = np.diag([0.0418, 0.04226, 0.05619])
 
-    # MOTOR MODEL: real vehicle linear approximation
-    MOTOR_SPEED_MODEL           = "linear"
+    # MOTOR MODEL: real vehicle quadratic approximation
+    MOTOR_SPEED_MODEL           = "quadratic"
     MOTOR_INPUT_SCALING         = 1180.0
-    MAX_ROT_VELOCITY            = 1180.0
+    MAX_ROT_VELOCITY            = 1121.83
     MOTOR_TIME_CONSTANT_UP      = 0.004 #要同定: モータ回転数が上がる際の時定数
     MOTOR_TIME_CONSTANT_DOWN    = 0.070 #要同定: モータ回転数が下がる際の時定数
 ROTOR_POSITIONS = np.array([
@@ -247,10 +247,8 @@ PX4_QUAD_X_MIX_INV = np.linalg.inv(PX4_QUAD_X_MIX)
 # actuator min and max value for PX4
 PX4_ACTUATOR_MIN            = np.zeros(4, dtype=float)
 PX4_ACTUATOR_MAX            = np.ones(4, dtype=float)
-# thrust coefficient 1.0792e-5
 MOTOR_THRUST_CONSTANT       = 1.0792e-5
-# torque coefficient 8.0e-8
-MOMENT_CONSTANT             = 8.0e-8
+MOMENT_CONSTANT             = 1.51e-7
 
 ZERO3 = np.zeros(3, dtype=float)
 LINEAR_VELOCITY_DAMPING_ENABLED = bool(np.any(LINEAR_VELOCITY_DAMPING != 0.0))
@@ -589,12 +587,17 @@ def actuator_motor_from_row(row):
             return np.clip(actuator, 0.0, 1.0)
     return None
 
-def motor_speed_from_setpoint(motor_setpoint, step_dt, prev_motor_speed=None):
-    motor_setpoint = np.clip(np.asarray(motor_setpoint, dtype=float)[:4], 0.0, 1.0)
+def motor_speed_ref_from_setpoint(motor_setpoint):
+    u = np.clip(np.asarray(motor_setpoint, dtype=float)[:4], 0.0, 1.0)
+    motor_speed_ref = (
+        1528.43944677 * u
+        - 406.61258522 * u * u
+    )
+    return np.clip(motor_speed_ref, 0.0, MAX_ROT_VELOCITY)
 
-    if MOTOR_SPEED_MODEL == "linear":
-        motor_speed_ref = motor_setpoint * MOTOR_INPUT_SCALING
-        motor_speed_ref = np.clip(motor_speed_ref, 0.0, MAX_ROT_VELOCITY)
+def motor_speed_from_setpoint(motor_setpoint, step_dt, prev_motor_speed=None):
+    if MOTOR_SPEED_MODEL == "quadratic":
+        motor_speed_ref = motor_speed_ref_from_setpoint(motor_setpoint)
     else:
         raise ValueError(f"unknown MOTOR_SPEED_MODEL: {MOTOR_SPEED_MODEL}")
     if prev_motor_speed is None:
@@ -636,12 +639,7 @@ def motor_speed_to_force_torque(motor_speed):
 
 
 def torque_from_motor_setpoint_no_lag(motor_setpoint):
-    motor_setpoint = np.clip(np.asarray(motor_setpoint, dtype=float)[:4], 0.0, 1.0)
-    motor_speed = np.clip(
-        motor_setpoint * MOTOR_INPUT_SCALING,
-        0.0,
-        MAX_ROT_VELOCITY,
-    )
+    motor_speed = motor_speed_ref_from_setpoint(motor_setpoint)
     motor_speed_squared = motor_speed * motor_speed
     rotor_forces = MOTOR_THRUST_CONSTANT * motor_speed_squared
     torque_body = np.array([
