@@ -43,7 +43,7 @@ const double CONST_PARAM::INIT_TARGET_ZP  = 0.0;
 const double CONST_PARAM::CONTROL_PERIOD      = 0.02;   // s
 const int    CONST_PARAM::N_OF_SAMPLES        = _DEVICE_CONST_THREAD_PER_BLOCK * _DEVICE_CONST_N_OF_BLOCK;
 const int    CONST_PARAM::N_OF_THE_USING_BEST = 100;
-const int    CONST_PARAM::ITERATION_TIMES     = 3;
+const int    CONST_PARAM::ITERATION_TIMES     = 2;
 const double CONST_PARAM::U_UPPER_LIM         = CONST_PARAM::U_G + CONST_PARAM::U_DIFF_LIM; // no units
 const double CONST_PARAM::U_LOWER_LIM         = CONST_PARAM::U_G - CONST_PARAM::U_DIFF_LIM; // no units
 

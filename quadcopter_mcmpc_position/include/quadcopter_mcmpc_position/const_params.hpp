@@ -20,7 +20,7 @@
 #define _INV_SQRT_2		0.7071067811865475f // 1/sqrt(2)
 
 // const for device (GPU)
-#define _DEVICE_CONST_HORIZON 			75 // horizon
+#define _DEVICE_CONST_HORIZON 			70 // horizon
 #define _DEVICE_CONST_THREAD_PER_BLOCK 	128 //_DEVICE_CONST_THREAD_PER_BLOCK * N_OF_BLOCK = N_OF_SAMPLES
 #define _DEVICE_CONST_N_OF_BLOCK 		64
 
