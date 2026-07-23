@@ -116,8 +116,22 @@ namespace qc_mcmpc
 	__constant__ float coeff_of_rest_device;
 #endif
 
-	__constant__ float control_period_device;
+    __constant__ float control_period_device;
 	__constant__ float integration_step_size_device;
+
+    __device__ float deterministic_sim_trajectory_device[_DEVICE_CONST_HORIZON][_N_OF_ODES];
+    __device__ float deterministic_sim_vel_int_device[_DEVICE_CONST_HORIZON][3];
+    __device__ float deterministic_sim_prev_acceleration_device[_DEVICE_CONST_HORIZON][3];
+    __device__ float deterministic_sim_rate_int_device[_DEVICE_CONST_HORIZON][3];
+    __device__ float deterministic_sim_prev_angular_acceleration_device[_DEVICE_CONST_HORIZON][3];
+    __device__ float deterministic_sim_motor_speed_device[_DEVICE_CONST_HORIZON][4];
+    __device__ float deterministic_sim_vel_setpoint_device[_DEVICE_CONST_HORIZON][3];
+    __device__ float deterministic_sim_acc_setpoint_device[_DEVICE_CONST_HORIZON][3];
+    __device__ float deterministic_sim_att_setpoint_device[_DEVICE_CONST_HORIZON][4];
+    __device__ float deterministic_sim_thrust_setpoint_device[_DEVICE_CONST_HORIZON][3];
+    __device__ float deterministic_sim_omega_setpoint_device[_DEVICE_CONST_HORIZON][3];
+    __device__ float deterministic_sim_torque_setpoint_device[_DEVICE_CONST_HORIZON][3];
+    __device__ float deterministic_sim_motor_setpoint_device[_DEVICE_CONST_HORIZON][4];
 
     __constant__ float var_and_z_i_device[_N_OF_ODES];
     __constant__ input_array average_input_device;
@@ -140,6 +154,13 @@ namespace qc_mcmpc
         const float* candidate_costs, const int* candidate_indices, int count, int* top_indices);
     __global__ static void weighted_average_topk(
         const input_array* samples, const float* costs, const int* top_indices, input_array* best_input);
+
+    __global__ void simulate_best_input_trajectory_kernel(input_array best_input)
+    {
+        if (blockIdx.x == 0 && threadIdx.x == 0) {
+            best_input.do_simulation(-1);
+        }
+    }
 
     void update_target_state_device();
 

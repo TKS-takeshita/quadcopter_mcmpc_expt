@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MCMPC Simulator Viewer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f7f8fa;
+      color: #182026;
+    }
+    body {
+      margin: 0;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px 18px;
+      border-bottom: 1px solid #d7dce2;
+      background: #ffffff;
+    }
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(320px, 1.2fr) minmax(320px, 1fr);
+      gap: 14px;
+      padding: 14px;
+    }
+    section {
+      min-width: 0;
+      background: #ffffff;
+      border: 1px solid #d7dce2;
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .wide {
+      grid-column: 1 / -1;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      font-size: 13px;
+    }
+    input[type="file"] {
+      max-width: 320px;
+    }
+    .stats {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      font-size: 13px;
+      color: #4d5963;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 340px;
+    }
+    .wide canvas {
+      height: 280px;
+    }
+    @media (max-width: 900px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>MCMPC Simulator Viewer</h1>
+    <div class="toolbar">
+      <input id="fileInput" type="file" accept="application/json,.json">
+      <span id="status">Select mcmpc_sim_output.json</span>
+    </div>
+  </header>
+  <main>
+    <section>
+      <div class="stats" id="stats"></div>
+      <canvas id="xyCanvas" width="900" height="620"></canvas>
+    </section>
+    <section>
+      <canvas id="zCanvas" width="900" height="620"></canvas>
+    </section>
+    <section class="wide">
+      <canvas id="inputCanvas" width="1200" height="420"></canvas>
+    </section>
+    <section class="wide">
+      <canvas id="costCanvas" width="1200" height="420"></canvas>
+    </section>
+  </main>
+  <script>
+    const fileInput = document.getElementById("fileInput");
+    const statusEl = document.getElementById("status");
+    const statsEl = document.getElementById("stats");
+
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      try {
+        const data = JSON.parse(await file.text());
+        render(data);
+        statusEl.textContent = file.name;
+      } catch (error) {
+        statusEl.textContent = `load failed: ${error.message}`;
+      }
+    });
+
+    function finiteValues(samples, key) {
+      return samples.map((sample) => Number(sample[key])).filter(Number.isFinite);
+    }
+
+    function extent(values, padRatio = 0.08, fallback = [-1, 1]) {
+      if (!values.length) return fallback;
+      let min = Math.min(...values);
+      let max = Math.max(...values);
+      if (Math.abs(max - min) < 1e-9) {
+        min -= 1;
+        max += 1;
+      }
+      const pad = (max - min) * padRatio;
+      return [min - pad, max + pad];
+    }
+
+    function drawAxes(ctx, box, xLabel, yLabel) {
+      ctx.strokeStyle = "#c8d0d8";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(box.x, box.y, box.w, box.h);
+      ctx.fillStyle = "#4d5963";
+      ctx.font = "13px system-ui";
+      ctx.fillText(xLabel, box.x + box.w - 44, box.y + box.h + 30);
+      ctx.save();
+      ctx.translate(box.x - 44, box.y + 48);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(yLabel, 0, 0);
+      ctx.restore();
+    }
+
+    function linePlot(canvas, series, options) {
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const box = {x: 70, y: 28, w: canvas.width - 100, h: canvas.height - 78};
+      const xExtent = options.xExtent || extent(series.flatMap((s) => s.x));
+      const yExtent = options.yExtent || extent(series.flatMap((s) => s.y));
+      const sx = (x) => box.x + (x - xExtent[0]) / (xExtent[1] - xExtent[0]) * box.w;
+      const sy = (y) => box.y + box.h - (y - yExtent[0]) / (yExtent[1] - yExtent[0]) * box.h;
+      drawAxes(ctx, box, options.xLabel, options.yLabel);
+      ctx.fillStyle = "#182026";
+      ctx.font = "16px system-ui";
+      ctx.fillText(options.title, box.x, 18);
+      for (const item of series) {
+        ctx.beginPath();
+        ctx.strokeStyle = item.color;
+        ctx.lineWidth = item.width || 2;
+        item.x.forEach((x, index) => {
+          const y = item.y[index];
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+          const px = sx(x);
+          const py = sy(y);
+          if (index === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        });
+        ctx.stroke();
+      }
+      let legendX = box.x + 8;
+      for (const item of series) {
+        ctx.fillStyle = item.color;
+        ctx.fillRect(legendX, box.y + 8, 18, 3);
+        ctx.fillStyle = "#4d5963";
+        ctx.fillText(item.label, legendX + 24, box.y + 13);
+        legendX += 110;
+      }
+    }
+
+    function render(data) {
+      const samples = Array.isArray(data.samples) ? data.samples : [];
+      if (!samples.length) {
+        statusEl.textContent = "no samples";
+        return;
+      }
+      const t = finiteValues(samples, "t");
+      const x = finiteValues(samples, "x");
+      const y = finiteValues(samples, "y");
+      const z = finiteValues(samples, "z");
+      const ux = finiteValues(samples, "ux");
+      const uy = finiteValues(samples, "uy");
+      const uz = finiteValues(samples, "uz");
+      const cost = finiteValues(samples, "cost");
+      const targetX = finiteValues(samples, "target_x");
+      const targetY = finiteValues(samples, "target_y");
+      const targetZ = finiteValues(samples, "target_z");
+
+      statsEl.innerHTML = `
+        <span>steps: ${samples.length}</span>
+        <span>dt: ${data.dt ?? "?"} s</span>
+        <span>horizon: ${data.horizon ?? "?"}</span>
+        <span>last: (${x.at(-1).toFixed(3)}, ${y.at(-1).toFixed(3)}, ${z.at(-1).toFixed(3)}) m</span>
+      `;
+
+      linePlot(document.getElementById("xyCanvas"), [
+        {label: "actual", x, y, color: "#1f77b4", width: 2.4},
+        {label: "target", x: targetX, y: targetY, color: "#d62728", width: 1.8},
+      ], {
+        title: "XY trajectory",
+        xLabel: "x [m]",
+        yLabel: "y [m]",
+        xExtent: [-0.9, 0.9],
+        yExtent: [-0.9, 0.9],
+      });
+
+      linePlot(document.getElementById("zCanvas"), [
+        {label: "z", x: t, y: z, color: "#1f77b4", width: 2.2},
+        {label: "target", x: t, y: targetZ, color: "#d62728", width: 1.8},
+      ], {
+        title: "Z",
+        xLabel: "time [s]",
+        yLabel: "z [m]",
+      });
+
+      linePlot(document.getElementById("inputCanvas"), [
+        {label: "ux", x: t, y: ux, color: "#1f77b4"},
+        {label: "uy", x: t, y: uy, color: "#2ca02c"},
+        {label: "uz", x: t, y: uz, color: "#9467bd"},
+      ], {
+        title: "MCMPC input setpoints",
+        xLabel: "time [s]",
+        yLabel: "position input [m]",
+      });
+
+      linePlot(document.getElementById("costCanvas"), [
+        {label: "cost", x: t, y: cost, color: "#ff7f0e", width: 2.2},
+      ], {
+        title: "Cost",
+        xLabel: "time [s]",
+        yLabel: "cost",
+      });
+    }
+  </script>
+</body>
+</html>

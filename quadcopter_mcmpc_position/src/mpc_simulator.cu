@@ -926,7 +926,6 @@ namespace qc_mcmpc
             // コストの計算
             cost += (_COST_Q_X*(var_and_z_i_temp[7] -pred_target_x )*(var_and_z_i_temp[7] -pred_target_x) + _COST_Q_Y *(var_and_z_i_temp[8] -pred_target_y) *(var_and_z_i_temp[8] -pred_target_y) + _COST_Q_Z *(var_and_z_i_temp[9] -pred_target_z) *(var_and_z_i_temp[9] -pred_target_z)     // x, y, z
                  +  _COST_Q_XP*(var_and_z_i_temp[10]-target_state_device.xp)*(var_and_z_i_temp[10]-target_state_device.xp)+ _COST_Q_YP*(var_and_z_i_temp[11]-target_state_device.yp)*(var_and_z_i_temp[11]-target_state_device.yp)+ _COST_Q_ZP*(var_and_z_i_temp[12]-target_state_device.zp)*(var_and_z_i_temp[12]-target_state_device.zp)    // xp, yp, zp
-                 +  _COST_Q_VREF_X*(var_and_z_i_temp[10]-vel_ref_cost[0])*(var_and_z_i_temp[10]-vel_ref_cost[0]) + _COST_Q_VREF_Y*(var_and_z_i_temp[11]-vel_ref_cost[1])*(var_and_z_i_temp[11]-vel_ref_cost[1]) + _COST_Q_VREF_Z*(var_and_z_i_temp[12]-vel_ref_cost[2])*(var_and_z_i_temp[12]-vel_ref_cost[2])
                  +  _COST_Q_E1*(var_and_z_i_temp[1] -target_state_device.e1)*(var_and_z_i_temp[1] -target_state_device.e1)+ _COST_Q_E2*(var_and_z_i_temp[2] -target_state_device.e2)*(var_and_z_i_temp[2] -target_state_device.e2)+ _COST_Q_E3*(var_and_z_i_temp[3] -target_state_device.e3)*(var_and_z_i_temp[3] -target_state_device.e3)         // e1, e2, e3
                  +  _COST_Q_WX*(var_and_z_i_temp[4] -target_state_device.wx)*(var_and_z_i_temp[4] -target_state_device.wx)+ _COST_Q_WY*(var_and_z_i_temp[5] -target_state_device.wy)*(var_and_z_i_temp[5] -target_state_device.wy)+ _COST_Q_WZ*(var_and_z_i_temp[6] -target_state_device.wz)*(var_and_z_i_temp[6] -target_state_device.wz)          // wx, wy, wz
                  +  _COST_R_X*(decoupled_position[i][x]-pred_target_x)*(decoupled_position[i][x]-pred_target_x)
@@ -971,6 +970,33 @@ namespace qc_mcmpc
             prev_vel[0] = var_and_z_i_temp[10];
             prev_vel[1] = var_and_z_i_temp[11];
             prev_vel[2] = var_and_z_i_temp[12];
+
+            if (sample_id < 0) {
+                for (int state_index = 0; state_index < _N_OF_ODES; state_index++) {
+                    deterministic_sim_trajectory_device[i][state_index] =
+                        var_and_z_i_temp[state_index];
+                }
+                for (int axis = 0; axis < 3; axis++) {
+                    deterministic_sim_vel_int_device[i][axis] = vel_int[axis];
+                    deterministic_sim_prev_acceleration_device[i][axis] = prev_acc[axis];
+                    deterministic_sim_rate_int_device[i][axis] = rate_int[axis];
+                    deterministic_sim_prev_angular_acceleration_device[i][axis] =
+                        prev_omega_dot[axis];
+                    deterministic_sim_vel_setpoint_device[i][axis] = vel_setpoint[axis];
+                    deterministic_sim_acc_setpoint_device[i][axis] = acc_setpoint[axis];
+                    deterministic_sim_thrust_setpoint_device[i][axis] = thrust_setpoint[axis];
+                    deterministic_sim_omega_setpoint_device[i][axis] = omega_setpoint[axis];
+                    deterministic_sim_torque_setpoint_device[i][axis] = torque_setpoint[axis];
+                }
+                for (int quat_index = 0; quat_index < 4; quat_index++) {
+                    deterministic_sim_att_setpoint_device[i][quat_index] =
+                        att_setpoint[quat_index];
+                }
+                for (int motor = 0; motor < 4; motor++) {
+                    deterministic_sim_motor_speed_device[i][motor] = motor_speed_state[motor];
+                    deterministic_sim_motor_setpoint_device[i][motor] = motor_setpoint[motor];
+                }
+            }
         }
         // 衝突に対して制約を与えたい場合はここに記述
 #ifdef PREDICTABLE_COLLISION_WITH_WALL

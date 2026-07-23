@@ -63,7 +63,27 @@ add_executable(quad_mcmpc_node
   src/quad_mcmpc_position.cu
 )
 
+add_executable(mcmpc_standalone_simulator
+  src/mcmpc_standalone_simulator.cu
+)
+
+add_executable(mcmpc_truth_simulator
+  src/mcmpc_truth_simulator.cu
+)
+
+add_executable(mcmpc_sim_joy_starter
+  src/mcmpc_sim_joy_starter.cpp
+)
+
 set_target_properties(quad_mcmpc_node PROPERTIES
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
+set_target_properties(mcmpc_standalone_simulator PROPERTIES
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
+set_target_properties(mcmpc_truth_simulator PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
 )
 
@@ -71,8 +91,29 @@ target_include_directories(quad_mcmpc_node PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+target_include_directories(mcmpc_standalone_simulator PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_include_directories(mcmpc_truth_simulator PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 target_link_libraries(quad_mcmpc_node
   mcmpc_core
+)
+
+target_link_libraries(mcmpc_standalone_simulator
+  mcmpc_core
+)
+
+target_link_libraries(mcmpc_truth_simulator
+  mcmpc_core
+)
+
+ament_target_dependencies(mcmpc_sim_joy_starter
+  rclcpp
+  sensor_msgs
 )
 
 ament_target_dependencies(quad_mcmpc_node
@@ -82,9 +123,23 @@ ament_target_dependencies(quad_mcmpc_node
   std_msgs
 )
 
+ament_target_dependencies(mcmpc_truth_simulator
+  rclcpp
+  px4_msgs
+  sensor_msgs
+  std_msgs
+)
+
 install(TARGETS
   quad_mcmpc_node
+  mcmpc_standalone_simulator
+  mcmpc_truth_simulator
+  mcmpc_sim_joy_starter
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY launch
+  DESTINATION share/${PROJECT_NAME}
 )
 
 install(TARGETS

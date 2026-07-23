@@ -35,9 +35,6 @@
 #define _COST_Q_XP 		0.0f
 #define _COST_Q_YP 		0.0f
 #define _COST_Q_ZP 		0.0f
-#define _COST_Q_VREF_X 	0.2f
-#define _COST_Q_VREF_Y 	0.2f
-#define _COST_Q_VREF_Z 	0.2f
 #define _COST_Q_E1 		0.0f
 #define _COST_Q_E2 		0.0f
 #define _COST_Q_E3 		0.0f
@@ -55,10 +52,10 @@
 #define _COST_TERMINAL_VX 	5.0f
 #define _COST_TERMINAL_VY 	5.0f
 #define _COST_TERMINAL_VZ 	5.0f
-#define _COST_DU_X 		0.001f
-#define _COST_DU_Y 		0.001f
-#define _COST_DU_Z 		0.001f
-#define _COST_DU_YAW 	0.0001f
+#define _COST_DU_X 		0.0f
+#define _COST_DU_Y 		0.0f
+#define _COST_DU_Z 		0.0f
+#define _COST_DU_YAW 	0.0f
 #ifdef MCMPC_WITH_FORCE_STATE
     #define _COST_Q_FX  1.0f
     #define _COST_Q_FY  1.0f

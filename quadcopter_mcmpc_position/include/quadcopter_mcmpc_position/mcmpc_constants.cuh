@@ -164,6 +164,22 @@ namespace qc_mcmpc{
 
     extern __constant__ int motor_command_delay_steps;
 
+    extern __device__ float deterministic_sim_trajectory_device[_DEVICE_CONST_HORIZON][_N_OF_ODES];
+    extern __device__ float deterministic_sim_vel_int_device[_DEVICE_CONST_HORIZON][3];
+    extern __device__ float deterministic_sim_prev_acceleration_device[_DEVICE_CONST_HORIZON][3];
+    extern __device__ float deterministic_sim_rate_int_device[_DEVICE_CONST_HORIZON][3];
+    extern __device__ float deterministic_sim_prev_angular_acceleration_device[_DEVICE_CONST_HORIZON][3];
+    extern __device__ float deterministic_sim_motor_speed_device[_DEVICE_CONST_HORIZON][4];
+    extern __device__ float deterministic_sim_vel_setpoint_device[_DEVICE_CONST_HORIZON][3];
+    extern __device__ float deterministic_sim_acc_setpoint_device[_DEVICE_CONST_HORIZON][3];
+    extern __device__ float deterministic_sim_att_setpoint_device[_DEVICE_CONST_HORIZON][4];
+    extern __device__ float deterministic_sim_thrust_setpoint_device[_DEVICE_CONST_HORIZON][3];
+    extern __device__ float deterministic_sim_omega_setpoint_device[_DEVICE_CONST_HORIZON][3];
+    extern __device__ float deterministic_sim_torque_setpoint_device[_DEVICE_CONST_HORIZON][3];
+    extern __device__ float deterministic_sim_motor_setpoint_device[_DEVICE_CONST_HORIZON][4];
+
+    __global__ void simulate_best_input_trajectory_kernel(input_array best_input);
+
     extern void update_target_state_device();
 
     static float prev_velocity_host[3] = {0.0f, 0.0f, 0.0f};

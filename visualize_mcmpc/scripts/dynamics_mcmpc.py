@@ -2,11 +2,10 @@
 #
 # 実行時入力:
 #   --csv                 読み込むログCSV。default: DEFAULT_CSV
-#   --state               表示する状態。例: x, y, z, vx, vy, vz, wx, wy, wz, roll, pitch, yaw
-#   --mode                予測モード。model_input / actuator_log / actual_state
+#   --state               表示する状態。例: x, y, z, vx, vy, vz, wx, wy, wz, roll, pitch, yaw, xy
 #   --start-idx           予測開始行。--start-time指定時はそちらを優先
 #   --start-time          表示時刻[s]で指定する単発予測開始時刻
-#   --horizon             予測ステップ数。default: PREDICTION_HORIZON
+#   --horizon             予測ステップ数。default: PREDICTION_HORIZON (= 70, 1.4s)
 #   --prediction-interval 複数予測線を描く間隔[s]。default: PREDICTION_INTERVAL
 #   --plot-start          表示開始時刻[s]
 #   --plot-end            表示終了時刻[s]
@@ -15,6 +14,8 @@
 #   --all-segments        時刻リセット後の最後の区間だけでなく全区間を表示
 #
 # model_inputで使う入力列:
+#   u0_x, u0_y, u0_z, u0_yaw ... u69_x, u69_y, u69_z, u69_yaw
+#     - MCMPCログの予測入力。20ms * 70step = 1.4sを表示
 #   target_x, target_y, target_z, target_yaw
 #   target_x_delayed, target_y_delayed, target_z_delayed, target_yaw_delayed
 #     - あれば delayed を優先
@@ -32,15 +33,6 @@
 #   landed, maybe_landed, ground_contact
 #     - no_thrust判定に使用
 #
-# actuator_logで使う入力列:
-#   actuator_motor_0, actuator_motor_1, actuator_motor_2, actuator_motor_3
-#   actuator_motor_input_0..3
-#     - add_actuator_input_columns()が生成。あればこちらを優先
-#
-# actual_stateで使う入力列:
-#   vel_x, vel_y, vel_z
-#   angular_vel_x, angular_vel_y, angular_vel_z
-#
 import argparse
 import copy
 import os
@@ -55,15 +47,9 @@ if not _mpl_config_dir or not os.access(_mpl_config_dir, os.W_OK):
 warnings.filterwarnings("ignore", message="Unable to import Axes3D.*", category=UserWarning, )
 import matplotlib.pyplot as plt
 
-DEFAULT_CSV = "/home/kt182/ws_mcmpc/src/quadcopter_mcmpc_expt/visualize_mcmpc/csv/offboard_control_log_real_sin_x.csv"
+DEFAULT_CSV = "/home/kt182/ws_mcmpc/src/quadcopter_mcmpc_expt/visualize_mcmpc/csv/mcmpc_log_move_square.csv"
 
 SIMULATION = False
-# prediction mode values:
-# - "actuator_log": use future logged actuator_motor values as model input.
-# - "actual_state": use logged velocity/angular velocity to integrate position/attitude.
-# - "model_input": use future model/controller inputs such as setpoints.
-MODE_ACTUATOR_LOG = "actuator_log"
-MODE_ACTUAL_STATE = "actual_state"
 MODE_MODEL_INPUT = "model_input"
 
 FUTURE_TARGET_COLUMNS = [
@@ -84,13 +70,11 @@ CA_MINIMUM_YAW_MARGIN                       = 0.15 #PX4 allocatorのyaw用余裕
 ANGULAR_ACCEL_LP                            = 30.0 #角速度微分のLPFカットオフ周波数
 MPC_ACC_DECOUPLE                            = False #PX4の加速度-スラスト変換でz加速度を切り離すか
 MOTOR_COMMAND_DELAY_STEPS                   = 0 #モータ指令がモデル反映までの遅れ
-ACTUATOR_LOG_SHIFT_STEPS                    = -1 #actuator_logの時刻補正
 TARGET_LOCAL_SP_DELAY_STEPS                 = 2 #target local position setpointの遅れ
 RATE_INT_SYNC_PERIOD                        = 1.5 #rate controllerの積分項ログと内部推定を同期する周期
-PREDICTION_HORIZON                          = 75 #予測ステップ数
-PREDICTION_INTERVAL                         = 1.5 #予測時間
+PREDICTION_HORIZON                          = 70 #MCMPC予測ステップ数: 20ms * 70 = 1.4s
+PREDICTION_INTERVAL                         = PREDICTION_HORIZON * DT #予測時間
 USE_RATE_INT_BIAS_TORQUE                    = True #Rate controllerの積分項に対するバイアス補正の有効化
-USE_RATE_INT_BIAS_TORQUE_WITH_ACTUATOR_LOG  = True #Actuator logを用いたRate controllerの積分項に対するバイアス補正の有効化
 USE_ACCELERATION_BIAS_OBSERVER              = True #モデル加速度とIMUから並進加速度バイアスを推定するか
 USE_LIVOX_IMU_ACCELERATION                  = True #Livox IMUの加速度をバイアス観測に使用するか
 USE_VELOCITY_DELTA_BIAS_OBSERVER            = True #1stepの速度差から加速度バイアスの推定の有効化
@@ -306,6 +290,46 @@ def quat_to_euler(q):
     )
     return np.array([roll, pitch, yaw])
 
+def normalize_mcmpc_log_columns(df):
+    df = df.copy()
+    rename_if_missing = {
+        "t": "control_time_s",
+        "cur_wx": "angular_vel_x",
+        "cur_wy": "angular_vel_y",
+        "cur_wz": "angular_vel_z",
+        "cur_x": "pos_x",
+        "cur_y": "pos_y",
+        "cur_z": "pos_z",
+        "cur_vx": "vel_x",
+        "cur_vy": "vel_y",
+        "cur_vz": "vel_z",
+        "px4_sp_vx": "local_sp_vx",
+        "px4_sp_vy": "local_sp_vy",
+        "px4_sp_vz": "local_sp_vz",
+        "px4_sp_acc_x": "local_sp_ax",
+        "px4_sp_acc_y": "local_sp_ay",
+        "px4_sp_acc_z": "local_sp_az",
+    }
+    for src, dst in rename_if_missing.items():
+        if dst not in df.columns and src in df.columns:
+            df[dst] = df[src]
+
+    quat_cols = ["cur_e0", "cur_e1", "cur_e2", "cur_e3"]
+    if all(col in df.columns for col in quat_cols):
+        quat_values = df[quat_cols].to_numpy(float)
+        euler_values = np.array([quat_to_euler(q) for q in quat_values])
+        for axis, col in enumerate(("roll", "pitch", "yaw")):
+            if col not in df.columns:
+                df[col] = euler_values[:, axis]
+
+    if "target_yaw" not in df.columns:
+        if "u0_yaw" in df.columns:
+            df["target_yaw"] = df["u0_yaw"]
+        elif "yaw" in df.columns:
+            df["target_yaw"] = df["yaw"]
+
+    return df
+
 def quat_to_rotmat(q):
     q0, q1, q2, q3 = normalize(q)
     return np.array([
@@ -364,6 +388,9 @@ def quat_multiply(a, b):
 def preprocess_log(df, step_dt):
     df = df.copy() #csv log
     df.columns = df.columns.str.strip() #remove whitespace from column names
+    df = normalize_mcmpc_log_columns(df)
+    if "control_time_s" not in df.columns:
+        raise ValueError("missing log column: control_time_s or t")
     # 1. control_time_sの有効な行のみ残す
     df = df[np.isfinite(df["control_time_s"].to_numpy(float))].reset_index(drop=True)
 
@@ -446,29 +473,19 @@ def preprocess_log(df, step_dt):
 
     return df
 
-#予測に使う actuator_motor 入力専用列 (actuator_log)
-def add_actuator_input_columns(df, shift_steps=ACTUATOR_LOG_SHIFT_STEPS):
-    df = df.copy()
-    actuator_cols =  [f"actuator_motor_{motor_idx}" for motor_idx in range(4)]
-    input_cols = [f"actuator_motor_input_{i}" for i in range(4)]
-    if not all(col in df.columns for col in actuator_cols):
-        return df
-
-    # segmentがあるならsegmentごとにshiftする
-    if "_segment_id" in df.columns:
-        shifted = df.groupby("_segment_id", sort=False)[actuator_cols].shift(shift_steps)
-    else:
-        shifted = df[actuator_cols].shift(shift_steps)
-
-    # 予測入力用の列として追加
-    for src, dst in zip(actuator_cols, input_cols):
-        df[dst] = shifted[src]
-    return df
-
 # モデル用状態ベクトルの作成
 def state_from_row(row):
     state = np.zeros(len(STATE_NAMES), dtype=float)
-    state[0:4] = euler_to_quat(row["roll"], row["pitch"], row["yaw"])
+    quat_cols = ["cur_e0", "cur_e1", "cur_e2", "cur_e3"]
+    if all(col in row.index for col in quat_cols):
+        q = row[quat_cols].to_numpy(float)
+        state[0:4] = (
+            normalize(q)
+            if np.all(np.isfinite(q))
+            else euler_to_quat(row["roll"], row["pitch"], row["yaw"])
+        )
+    else:
+        state[0:4] = euler_to_quat(row["roll"], row["pitch"], row["yaw"])
     #角速度
     state[STATE_INDEX["wx"]] = row["angular_vel_x"]
     state[STATE_INDEX["wy"]] = row["angular_vel_y"]
@@ -576,18 +593,6 @@ def make_position_setpoint_from_row(row, horizon_step=None, use_local_sp=False):
     pos_sp = np.array([x_ref, y_ref, z_ref], dtype=float)
     return pos_sp, yaw_sp
 
-
-#csvの1行から4つのモータ指令の取り出し
-def actuator_motor_from_row(row):
-    input_cols = [f"actuator_motor_input_{i}" for i in range(4)]
-    raw_cols = [f"actuator_motor_{i}" for i in range(4)]
-    for cols in (input_cols, raw_cols):
-        if not all(col in row.index for col in cols):
-            continue
-        actuator = row[cols].to_numpy(float)
-        if np.all(np.isfinite(actuator)):
-            return np.clip(actuator, 0.0, 1.0)
-    return None
 
 def motor_speed_ref_from_setpoint(motor_setpoint):
     u = np.clip(np.asarray(motor_setpoint, dtype=float)[:4], 0.0, 1.0)
@@ -787,7 +792,7 @@ def estimate_rate_int_bias_torque(rate_int, thrust_z_setpoint, step_dt):
 def should_apply_rate_int_bias_torque(using_actuator_motor_override):
     if not USE_RATE_INT_BIAS_TORQUE:
         return False
-    return (not using_actuator_motor_override) or USE_RATE_INT_BIAS_TORQUE_WITH_ACTUATOR_LOG
+    return not using_actuator_motor_override
 
 def apply_motor_command_delay(motor_setpoint, motor_command_delay_buffer, motor_command_delay_steps):
     motor_setpoint = np.asarray(motor_setpoint, dtype=float).copy()
@@ -971,6 +976,25 @@ def log_vector_from_row(row, names):
     return values
 
 
+def sync_vertical_context_from_logged_model(row, context):
+    synced = copy.deepcopy(context)
+    if "model_vel_int_z" in row.index and np.isfinite(row["model_vel_int_z"]):
+        vel_int = np.asarray(
+            synced.get("vel_int", np.zeros(3, dtype=float)),
+            dtype=float,
+        ).copy()
+        vel_int[2] = float(row["model_vel_int_z"])
+        synced["vel_int"] = vel_int
+    if "model_acc_bias_z" in row.index and np.isfinite(row["model_acc_bias_z"]):
+        acceleration_bias = np.asarray(
+            synced.get("acceleration_bias", np.zeros(3, dtype=float)),
+            dtype=float,
+        ).copy()
+        acceleration_bias[2] = float(row["model_acc_bias_z"])
+        synced["acceleration_bias"] = acceleration_bias
+    return synced
+
+
 def update_dynamics_bias_observer(context, row, next_row, state, debug, dt):
     if not USE_DYNAMICS_BIAS_OBSERVER or next_row is None or dt <= 0.0:
         return {}
@@ -1051,61 +1075,8 @@ def next_row_for_observer(df, row_idx):
         return None
     return df.loc[next_idx]
 
-def make_input_from_row(row, state, mode, context, dt):
-    if mode == MODE_ACTUATOR_LOG:
-        return make_input_from_logged_actuator(row, state, context, dt)
-    if mode == MODE_ACTUAL_STATE:
-        return make_input_from_actual_state(row), {}, context
-    if mode == MODE_MODEL_INPUT:
-        return make_input_from_setpoint(row, state, context, dt)
-    raise ValueError(f"unknown mode: {mode}")
-
-def make_input_from_logged_actuator(row, state, context, dt, horizon_step=None, use_log_feedback=True):
-    actuator = actuator_motor_from_row(row)
-    if actuator is None:
-        raise ValueError("actuator_motor input is missing or invalid")
-    input_data, input_debug, context = make_input_from_setpoint(
-        row,
-        state,
-        context,
-        dt,
-        horizon_step=horizon_step,
-        use_log_feedback=use_log_feedback,
-    )
-    calculated_actuator = np.asarray(
-        input_data.get("actuator", np.zeros(4, dtype=float)),
-        dtype=float,
-    ).copy()
-    input_debug["calculated_motor_setpoint_used"] = np.asarray(
-        calculated_actuator,
-        dtype=float,
-    )
-    input_data = {
-        "kind": "actuator",
-        "actuator": actuator,
-        "bias_torque": input_data.get("bias_torque", np.zeros(3, dtype=float)),
-        "acceleration_bias": input_data.get("acceleration_bias", np.zeros(3, dtype=float)),
-        "force_bias": input_data.get("force_bias", np.zeros(3, dtype=float)),
-        "torque_bias": input_data.get("torque_bias", np.zeros(3, dtype=float)),
-    }
-    input_debug["motor_setpoint_used"] = actuator.copy()
-    return input_data, input_debug, context
-
-def make_input_from_actual_state(row):
-    return {
-        "kind": "actual_state",
-        "velocity": np.array([
-            row["vel_x"],
-            row["vel_y"],
-            row["vel_z"],
-        ], dtype=float),
-        "angular_velocity": np.array([
-            row["angular_vel_x"],
-            row["angular_vel_y"],
-            row["angular_vel_z"],
-        ], dtype=float),
-    }
-
+def make_input_from_row(row, state, context, dt):
+    return make_input_from_setpoint(row, state, context, dt)
 
 def merge_future_target_row(base_row, target_row):
     input_row = base_row.copy()
@@ -1574,7 +1545,7 @@ def make_input_from_setpoint(row, state, context, dt, horizon_step=None, use_log
     if use_log_feedback:
         context["prev_log_vel"] = current_log_vel.copy()
     return input_data, debug, context
-def warm_prediction_context(df, start_idx, dt, mode=MODE_MODEL_INPUT):
+def warm_prediction_context(df, start_idx, dt):
     context = {}
     prev_motor_speed = None
     warm_end = int(np.clip(start_idx, 0, len(df)))
@@ -1588,7 +1559,7 @@ def warm_prediction_context(df, start_idx, dt, mode=MODE_MODEL_INPUT):
             prev_motor_speed = None
         row = df.loc[row_idx]
         state = state_from_row(row)
-        input_data, input_debug, context = make_input_from_row(row, state, mode, context, dt)
+        input_data, input_debug, context = make_input_from_row(row, state, context, dt)
         _, debug = dynamics_step(
             state,
             input_data,
@@ -1612,7 +1583,7 @@ def warm_prediction_context(df, start_idx, dt, mode=MODE_MODEL_INPUT):
     return context, prev_motor_speed
 
 
-def build_prediction_contexts(df, start_indices, dt, mode=MODE_MODEL_INPUT):
+def build_prediction_contexts(df, start_indices, dt):
     start_set = set(int(idx) for idx in start_indices)
     if not start_set:
         return {}
@@ -1635,7 +1606,7 @@ def build_prediction_contexts(df, start_indices, dt, mode=MODE_MODEL_INPUT):
             )
         row = df.loc[row_idx]
         state = state_from_row(row)
-        input_data, input_debug, context = make_input_from_row(row, state, mode, context, dt)
+        input_data, input_debug, context = make_input_from_row(row, state, context, dt)
         _, debug = dynamics_step(
             state,
             input_data,
@@ -1664,7 +1635,6 @@ def rollout(
     start_idx,
     horizon,
     dt,
-    mode=MODE_ACTUATOR_LOG,
     initial_context=None,
     initial_prev_motor_speed=None,
 ):
@@ -1675,11 +1645,7 @@ def rollout(
     context = copy.deepcopy(initial_context) if initial_context is not None else {}
     debug_list = []
     start_segment = df.loc[start_idx, "_segment_id"] if "_segment_id" in df.columns else None
-    realtime_input_row = (
-        df.loc[start_idx].copy()
-        if mode in (MODE_MODEL_INPUT, MODE_ACTUATOR_LOG)
-        else None
-    )
+    realtime_input_row = df.loc[start_idx].copy()
     for h in range(horizon):
         row_idx = start_idx + h
         if row_idx >= len(df):
@@ -1687,36 +1653,15 @@ def rollout(
         if start_segment is not None and df.loc[row_idx, "_segment_id"] != start_segment:
             break
         row = df.loc[row_idx]
-        if mode == MODE_MODEL_INPUT:
-            target_input_row = merge_future_target_row(realtime_input_row, row)
-            input_data, input_debug, context = make_input_from_setpoint(
-                target_input_row,
-                state,
-                context,
-                dt,
-                horizon_step=h,
-                use_log_feedback=False,
-            )
-        elif mode == MODE_ACTUATOR_LOG:
-            actuator = actuator_motor_from_row(row)
-            if actuator is None:
-                raise ValueError("actuator_motor input is missing or invalid")
-            input_data, input_debug, context = make_input_from_setpoint(
-                realtime_input_row,
-                state,
-                context,
-                dt,
-                horizon_step=h,
-                use_log_feedback=False,
-            )
-            input_debug["calculated_motor_setpoint_used"] = np.asarray(
-                input_data["actuator"],
-                dtype=float,
-            ).copy()
-            input_data["actuator"] = actuator
-            input_debug["motor_setpoint_used"] = actuator.copy()
-        else:
-            input_data, input_debug, context = make_input_from_row(row, state, mode, context, dt)
+        target_input_row = merge_future_target_row(realtime_input_row, row)
+        input_data, input_debug, context = make_input_from_setpoint(
+            target_input_row,
+            state,
+            context,
+            dt,
+            horizon_step=h,
+            use_log_feedback=False,
+        )
         state, debug = dynamics_step(
             state,
             input_data,
@@ -1782,9 +1727,33 @@ def state_axis_label(state_name):
         "roll": "rad",
         "pitch": "rad",
         "yaw": "rad",
+        "ux": "m",
+        "uy": "m",
+        "uz": "m",
+        "uyaw": "rad",
     }
     unit = units.get(state_name)
     return f"{state_name} [{unit}]" if unit else state_name
+
+
+INPUT_STATE_COLUMNS = {
+    "ux": "x",
+    "uy": "y",
+    "uz": "z",
+    "uyaw": "yaw",
+}
+
+INPUT_TARGET_COLUMNS = {
+    "ux": "target_x",
+    "uy": "target_y",
+}
+
+STATE_TARGET_COLUMNS = {
+    "x": "target_x",
+    "y": "target_y",
+    "z": "target_z",
+    "yaw": "target_yaw",
+}
 
 
 def time_array_from_df(df, dt=DT):
@@ -1835,6 +1804,232 @@ def prediction_start_indices(plot_t, display_mask, prediction_interval=PREDICTIO
     return np.asarray(starts, dtype=int)
 
 
+def waypoint_xy_from_df(df, mask):
+    if "target_x" in df.columns and "target_y" in df.columns:
+        waypoint_xy = df[["target_x", "target_y"]].to_numpy(float)
+    elif "u0_x" in df.columns and "u0_y" in df.columns:
+        waypoint_xy = df[["u0_x", "u0_y"]].to_numpy(float)
+    else:
+        return np.empty((0, 2), dtype=float)
+
+    mask = np.asarray(mask, dtype=bool) & np.all(np.isfinite(waypoint_xy), axis=1)
+    waypoint_xy = waypoint_xy[mask]
+    if len(waypoint_xy) == 0:
+        return waypoint_xy
+
+    keep = np.ones(len(waypoint_xy), dtype=bool)
+    keep[1:] = np.linalg.norm(np.diff(waypoint_xy, axis=0), axis=1) > 1.0e-6
+    return waypoint_xy[keep]
+
+
+def plot_xy(
+    df,
+    dt=DT,
+    plot_start=None,
+    plot_end=None,
+    display_last_segment=True,
+    ax=None,
+    show=True,
+):
+    plot_t = time_array_from_df(df, dt)
+    display_mask = (
+        default_display_mask(df)
+        if display_last_segment
+        else np.ones(len(df), dtype=bool)
+    )
+    x = state_series_from_df(df, "x")
+    y = state_series_from_df(df, "y")
+    plot_mask = display_mask & np.isfinite(plot_t) & np.isfinite(x) & np.isfinite(y)
+    if plot_start is not None:
+        plot_mask &= plot_t >= float(plot_start) - 1.0e-9
+    if plot_end is not None:
+        plot_mask &= plot_t <= float(plot_end) + 1.0e-9
+
+    if ax is None:
+        _, ax = plt.subplots()
+    ax.plot(
+        x[plot_mask],
+        y[plot_mask],
+        color="tab:blue",
+        linewidth=2.0,
+        label="xy_actual",
+    )
+
+    waypoints = waypoint_xy_from_df(df, plot_mask)
+    if len(waypoints) > 0:
+        ax.scatter(
+            waypoints[:, 0],
+            waypoints[:, 1],
+            color="red",
+            s=36,
+            zorder=3,
+            label="waypoint",
+        )
+
+    ax.set_title("xy")
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("y [m]")
+    ax.grid(True)
+    ax.axis("equal")
+    ax.set_xlim(-0.8, 0.8)
+    ax.set_ylim(-0.8, 0.8)
+    ax.legend()
+    if show:
+        plt.show()
+    return ax, waypoints
+
+
+def input_series_from_df(df, input_state_name):
+    if input_state_name not in INPUT_STATE_COLUMNS:
+        raise ValueError(f"unknown input state: {input_state_name}")
+    col = f"u0_{INPUT_STATE_COLUMNS[input_state_name]}"
+    if col not in df.columns:
+        raise ValueError(f"missing log column: {col}")
+    return df[col].to_numpy(float)
+
+
+def input_target_series_from_df(df, input_state_name):
+    col = INPUT_TARGET_COLUMNS.get(input_state_name)
+    if col is None or col not in df.columns:
+        return None, None
+    return col, df[col].to_numpy(float)
+
+
+def state_target_series_from_df(df, state_name):
+    col = STATE_TARGET_COLUMNS.get(state_name)
+    if col is None or col not in df.columns:
+        return None, None
+    return col, df[col].to_numpy(float)
+
+
+def input_horizon_from_row(row, input_state_name, horizon):
+    if input_state_name not in INPUT_STATE_COLUMNS:
+        raise ValueError(f"unknown input state: {input_state_name}")
+    suffix = INPUT_STATE_COLUMNS[input_state_name]
+    values = []
+    for h in range(int(max(1, horizon))):
+        col = f"u{h}_{suffix}"
+        if col not in row.index:
+            break
+        values.append(float(row[col]))
+    if not values:
+        raise ValueError(f"missing log column: u0_{suffix}")
+    return np.asarray(values, dtype=float)
+
+
+def plot_input_state(
+    df,
+    input_state_name,
+    start_idx=0,
+    start_time=None,
+    horizon=PREDICTION_HORIZON,
+    dt=DT,
+    prediction_interval=PREDICTION_INTERVAL,
+    plot_start=None,
+    plot_end=None,
+    auto_window=False,
+    window_before=1.0,
+    window_after=None,
+    display_last_segment=True,
+    ax=None,
+    show=True,
+):
+    plot_t = time_array_from_df(df, dt)
+    actual_value = input_series_from_df(df, input_state_name)
+    display_mask = (
+        default_display_mask(df)
+        if display_last_segment
+        else np.ones(len(df), dtype=bool)
+    )
+
+    time_start_idx = index_from_time(plot_t, start_time)
+    if time_start_idx is not None:
+        start_indices = np.array([time_start_idx], dtype=int)
+    else:
+        start_indices = prediction_start_indices(
+            plot_t,
+            display_mask,
+            prediction_interval=prediction_interval,
+        )
+        if len(start_indices) == 0:
+            start_idx = int(np.clip(start_idx, 0, max(len(df) - 1, 0)))
+            start_indices = np.array([start_idx], dtype=int)
+
+    if ax is None:
+        _, ax = plt.subplots()
+    actual_mask = display_mask & np.isfinite(plot_t) & np.isfinite(actual_value)
+    if auto_window and plot_start is None and plot_end is None:
+        if window_after is None:
+            window_after = horizon * dt + 1.0
+        first_start = int(start_indices[0])
+        plot_start = plot_t[first_start] - window_before
+        plot_end = plot_t[first_start] + window_after
+    if plot_start is not None:
+        actual_mask &= plot_t >= float(plot_start) - 1.0e-9
+    if plot_end is not None:
+        actual_mask &= plot_t <= float(plot_end) + 1.0e-9
+
+    ax.plot(
+        plot_t[actual_mask],
+        actual_value[actual_mask],
+        color="tab:orange",
+        linewidth=2.0,
+        linestyle="--",
+        label=f"{input_state_name}_actual",
+    )
+
+    target_col, target_value = input_target_series_from_df(df, input_state_name)
+    if target_value is not None:
+        target_mask = display_mask & np.isfinite(plot_t) & np.isfinite(target_value)
+        if plot_start is not None:
+            target_mask &= plot_t >= float(plot_start) - 1.0e-9
+        if plot_end is not None:
+            target_mask &= plot_t <= float(plot_end) + 1.0e-9
+        ax.plot(
+            plot_t[target_mask],
+            target_value[target_mask],
+            color="red",
+            linewidth=1.8,
+            label=target_col,
+        )
+
+    pred_rollouts = []
+    for pred_i, pred_start_idx in enumerate(start_indices):
+        pred_start_idx = int(np.clip(pred_start_idx, 0, max(len(df) - 1, 0)))
+        pred_value = input_horizon_from_row(df.loc[pred_start_idx], input_state_name, horizon)
+        pred_t = plot_t[pred_start_idx] + np.arange(len(pred_value), dtype=float) * dt
+        pred_mask = np.isfinite(pred_t) & np.isfinite(pred_value)
+        if plot_start is not None:
+            pred_mask &= pred_t >= float(plot_start) - 1.0e-9
+        if plot_end is not None:
+            pred_mask &= pred_t <= float(plot_end) + 1.0e-9
+        ax.plot(
+            pred_t[pred_mask],
+            pred_value[pred_mask],
+            color="tab:cyan",
+            linewidth=2.0,
+            alpha=0.8,
+            label=f"{input_state_name}_prediction" if pred_i == 0 else None,
+        )
+        pred_rollouts.append((pred_start_idx, pred_value))
+
+    if len(start_indices) > 0:
+        ax.axvline(plot_t[int(start_indices[0])], color="0.4", linewidth=1.0, alpha=0.5)
+    ax.set_title(input_state_name)
+    ax.set_xlabel("time [s]")
+    ax.set_ylabel(state_axis_label(input_state_name))
+    ax.grid(True)
+    ax.legend()
+    if plot_start is not None or plot_end is not None or np.any(actual_mask):
+        left = float(plot_start) if plot_start is not None else np.nanmin(plot_t[actual_mask])
+        right = float(plot_end) if plot_end is not None else np.nanmax(plot_t[actual_mask])
+        if np.isfinite(left) and np.isfinite(right) and right > left:
+            ax.set_xlim(left, right)
+    if show:
+        plt.show()
+    return ax, pred_rollouts
+
+
 def plot_state(
     df,
     state_name,
@@ -1842,7 +2037,6 @@ def plot_state(
     start_time=None,
     horizon=PREDICTION_HORIZON,
     dt=DT,
-    mode=MODE_MODEL_INPUT,
     prediction_interval=PREDICTION_INTERVAL,
     plot_start=None,
     plot_end=None,
@@ -1896,20 +2090,40 @@ def plot_state(
         linestyle="--",
         label=f"{state_name}_actual",
     )
+
+    target_col, target_value = state_target_series_from_df(df, state_name)
+    if target_value is not None:
+        target_mask = display_mask & np.isfinite(plot_t) & np.isfinite(target_value)
+        if plot_start is not None:
+            target_mask &= plot_t >= float(plot_start) - 1.0e-9
+        if plot_end is not None:
+            target_mask &= plot_t <= float(plot_end) + 1.0e-9
+        ax.plot(
+            plot_t[target_mask],
+            target_value[target_mask],
+            color="red",
+            linewidth=1.8,
+            label=target_col,
+        )
+
     pred_rollouts = []
-    context_by_start = build_prediction_contexts(df, start_indices, dt, mode=mode)
+    context_by_start = build_prediction_contexts(df, start_indices, dt)
     for pred_i, pred_start_idx in enumerate(start_indices):
         pred_start_idx = int(np.clip(pred_start_idx, 0, max(len(df) - 1, 0)))
         initial_context, initial_prev_motor_speed = context_by_start.get(
             pred_start_idx,
             ({}, None),
         )
+        if state_name in ("z", "vz"):
+            initial_context = sync_vertical_context_from_logged_model(
+                df.loc[pred_start_idx],
+                initial_context,
+            )
         pred_states, _ = rollout(
             df,
             pred_start_idx,
             horizon,
             dt,
-            mode=mode,
             initial_context=initial_context,
             initial_prev_motor_speed=initial_prev_motor_speed,
         )
@@ -1927,7 +2141,7 @@ def plot_state(
             color="tab:cyan",
             linewidth=2.0,
             alpha=0.8,
-            label=f"{state_name}_{mode}" if pred_i == 0 else None,
+            label=f"{state_name}_{MODE_MODEL_INPUT}" if pred_i == 0 else None,
         )
     if len(start_indices) > 0:
         ax.axvline(plot_t[int(start_indices[0])], color="0.4", linewidth=1.0, alpha=0.5)
@@ -1948,7 +2162,7 @@ def plot_state(
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", default=DEFAULT_CSV)
-    parser.add_argument("--state", default="x")
+    parser.add_argument("--state", nargs="+", default=["x"])
     parser.add_argument("--start-idx", type=int, default=0)
     parser.add_argument("--start-time", type=float, default=None)
     parser.add_argument("--horizon", type=int, default=PREDICTION_HORIZON)
@@ -1958,29 +2172,51 @@ def main():
     parser.add_argument("--full-range", action="store_true")
     parser.add_argument("--auto-window", action="store_true")
     parser.add_argument("--all-segments", action="store_true")
-    parser.add_argument(
-        "--mode",
-        default=MODE_MODEL_INPUT,
-        choices=[MODE_MODEL_INPUT, MODE_ACTUATOR_LOG, MODE_ACTUAL_STATE],
-    )
     args = parser.parse_args()
     df = pd.read_csv(args.csv)
     df = preprocess_log(df, DT)
-    df = add_actuator_input_columns(df)
-    plot_state(
-        df,
-        args.state,
-        start_idx=args.start_idx,
-        start_time=args.start_time,
-        horizon=args.horizon,
-        dt=DT,
-        mode=args.mode,
-        prediction_interval=args.prediction_interval,
-        plot_start=args.plot_start,
-        plot_end=args.plot_end,
-        auto_window=args.auto_window and not args.full_range,
-        display_last_segment=not args.all_segments,
-        show=True,
-    )
+    states = args.state
+    if len(states) > 2:
+        raise ValueError("--state accepts one or two states")
+    if "xy" in states and len(states) > 1:
+        raise ValueError("--state xy cannot be combined with another state")
+    if states[0] == "xy":
+        plot_xy(
+            df,
+            dt=DT,
+            plot_start=args.plot_start,
+            plot_end=args.plot_end,
+            display_last_segment=not args.all_segments,
+            show=True,
+        )
+        return
+
+    def plot_named_state(state_name, ax=None, show=True):
+        plot_fn = plot_input_state if state_name in INPUT_STATE_COLUMNS else plot_state
+        return plot_fn(
+            df,
+            state_name,
+            start_idx=args.start_idx,
+            start_time=args.start_time,
+            horizon=args.horizon,
+            dt=DT,
+            prediction_interval=args.prediction_interval,
+            plot_start=args.plot_start,
+            plot_end=args.plot_end,
+            auto_window=args.auto_window and not args.full_range,
+            display_last_segment=not args.all_segments,
+            ax=ax,
+            show=show,
+        )
+
+    if len(states) == 1:
+        plot_named_state(states[0], show=True)
+        return
+
+    fig, axes = plt.subplots(2, 1, sharex=True)
+    for ax, state_name in zip(axes, states):
+        plot_named_state(state_name, ax=ax, show=False)
+    fig.tight_layout()
+    plt.show()
 if __name__ == "__main__":
     main()
