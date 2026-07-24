@@ -6,10 +6,10 @@
   <title>MCMPC Simulator Viewer</title>
   <style>
     :root {
-      color-scheme: light;
+      color-scheme: dark;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f7f8fa;
-      color: #182026;
+      background: #0d1117;
+      color: #c9d4e0;
     }
     body {
       margin: 0;
@@ -20,8 +20,8 @@
       justify-content: space-between;
       gap: 16px;
       padding: 14px 18px;
-      border-bottom: 1px solid #d7dce2;
-      background: #ffffff;
+      border-bottom: 1px solid #243140;
+      background: #141b24;
     }
     h1 {
       margin: 0;
@@ -36,8 +36,8 @@
     }
     section {
       min-width: 0;
-      background: #ffffff;
-      border: 1px solid #d7dce2;
+      background: #141b24;
+      border: 1px solid #243140;
       border-radius: 8px;
       padding: 12px;
     }
@@ -51,6 +51,17 @@
       flex-wrap: wrap;
       font-size: 13px;
     }
+    button, select {
+      font: inherit;
+      color: #c9d4e0;
+      background: #1b2733;
+      border: 1px solid #2d4053;
+      border-radius: 6px;
+      padding: 6px 12px;
+    }
+    button { cursor: pointer; }
+    button:hover { border-color: #56c8ff; }
+    input[type="range"] { accent-color: #56c8ff; }
     input[type="file"] {
       max-width: 320px;
     }
@@ -59,7 +70,7 @@
       gap: 16px;
       flex-wrap: wrap;
       font-size: 13px;
-      color: #4d5963;
+      color: #8da0b3;
     }
     canvas {
       display: block;
@@ -69,10 +80,51 @@
     .wide canvas {
       height: 280px;
     }
+    .flight-wrap {
+      position: relative;
+      height: min(58vh, 560px);
+      min-height: 380px;
+      overflow: hidden;
+      border-radius: 6px;
+      background: #0d1117;
+    }
+    .flight-wrap canvas { width: 100%; height: 100%; }
+    .hud {
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      padding: 8px 11px;
+      border: 1px solid #243140;
+      border-radius: 6px;
+      background: rgba(13, 17, 23, .84);
+      color: #c9d4e0;
+      font: 12px/1.7 ui-monospace, SFMono-Regular, Consolas, monospace;
+      pointer-events: none;
+    }
+    #timeline { flex: 1 1 240px; min-width: 180px; }
+    .prediction-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(420px, 1fr));
+      gap: 14px;
+      grid-column: 1 / -1;
+    }
+    .prediction-chart {
+      min-width: 0;
+      padding: 10px;
+      background: #141b24;
+      border: 1px solid #243140;
+      border-radius: 8px;
+    }
+    .prediction-chart canvas {
+      display: block;
+      width: 100%;
+      height: 340px;
+    }
     @media (max-width: 900px) {
       main {
         grid-template-columns: 1fr;
       }
+      .prediction-grid { grid-template-columns: 1fr; }
       header {
         align-items: flex-start;
         flex-direction: column;
@@ -89,6 +141,28 @@
     </div>
   </header>
   <main>
+    <section class="wide">
+      <div class="toolbar">
+        <button id="playButton">▶ 再生</button>
+        <button id="resetButton">⟲ リセット</button>
+        <label>速度
+          <select id="speedSelect">
+            <option value="0.25">0.25×</option>
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+          </select>
+        </label>
+        <input id="timeline" type="range" min="0" max="0" step="1" value="0">
+        <span id="clock">t=0.00 s</span>
+        <span class="muted">3D: ドラッグで回転 / ホイールでズーム / ダブルクリックで視点リセット</span>
+      </div>
+      <div class="flight-wrap">
+        <canvas id="flightCanvas" width="1400" height="700"></canvas>
+        <div class="hud" id="flightHud">JSONを読み込んでください</div>
+      </div>
+    </section>
     <section>
       <div class="stats" id="stats"></div>
       <canvas id="xyCanvas" width="900" height="620"></canvas>
@@ -102,23 +176,115 @@
     <section class="wide">
       <canvas id="costCanvas" width="1200" height="420"></canvas>
     </section>
+    <div id="predictionGrid" class="prediction-grid"></div>
   </main>
   <script>
     const fileInput = document.getElementById("fileInput");
     const statusEl = document.getElementById("status");
     const statsEl = document.getElementById("stats");
+    const playButton = document.getElementById("playButton");
+    const resetButton = document.getElementById("resetButton");
+    const speedSelect = document.getElementById("speedSelect");
+    const timeline = document.getElementById("timeline");
+    const clock = document.getElementById("clock");
+    const flightHud = document.getElementById("flightHud");
+    const flightCanvas = document.getElementById("flightCanvas");
+    let animationSamples = [];
+    let animationWaypoints = [];
+    let animationIndex = 0;
+    let playing = false;
+    let lastFrameTime = 0;
+    const initialCamera = {yaw: Math.PI / 4, pitch: 0.42, zoom: 1.0};
+    let cameraYaw = initialCamera.yaw;
+    let cameraPitch = initialCamera.pitch;
+    let cameraZoom = initialCamera.zoom;
+    let cameraDragging = false;
+    let cameraPointerX = 0;
+    let cameraPointerY = 0;
+
+    flightCanvas.style.cursor = "grab";
+    flightCanvas.style.touchAction = "none";
+    flightCanvas.addEventListener("pointerdown", event => {
+      cameraDragging = true;
+      cameraPointerX = event.clientX;
+      cameraPointerY = event.clientY;
+      flightCanvas.setPointerCapture(event.pointerId);
+      flightCanvas.style.cursor = "grabbing";
+    });
+    flightCanvas.addEventListener("pointermove", event => {
+      if (!cameraDragging) return;
+      const dx = event.clientX - cameraPointerX;
+      const dy = event.clientY - cameraPointerY;
+      cameraPointerX = event.clientX;
+      cameraPointerY = event.clientY;
+      cameraYaw += dx * 0.008;
+      cameraPitch = Math.max(0.05, Math.min(1.45, cameraPitch - dy * 0.006));
+      drawFlight();
+    });
+    const stopCameraDrag = event => {
+      cameraDragging = false;
+      if (flightCanvas.hasPointerCapture(event.pointerId)) {
+        flightCanvas.releasePointerCapture(event.pointerId);
+      }
+      flightCanvas.style.cursor = "grab";
+    };
+    flightCanvas.addEventListener("pointerup", stopCameraDrag);
+    flightCanvas.addEventListener("pointercancel", stopCameraDrag);
+    flightCanvas.addEventListener("wheel", event => {
+      event.preventDefault();
+      cameraZoom = Math.max(0.45, Math.min(3.0,
+        cameraZoom * Math.exp(-event.deltaY * 0.001)));
+      drawFlight();
+    }, {passive:false});
+    flightCanvas.addEventListener("dblclick", () => {
+      cameraYaw = initialCamera.yaw;
+      cameraPitch = initialCamera.pitch;
+      cameraZoom = initialCamera.zoom;
+      drawFlight();
+    });
+
+    function fitCanvas(canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const pixelRatio = window.devicePixelRatio || 1;
+      const pixelWidth = Math.max(1, Math.round(rect.width * pixelRatio));
+      const pixelHeight = Math.max(1, Math.round(rect.height * pixelRatio));
+      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+      }
+      const ctx = canvas.getContext("2d");
+      ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      return {ctx, width: rect.width, height: rect.height};
+    }
 
     fileInput.addEventListener("change", async () => {
       const file = fileInput.files && fileInput.files[0];
       if (!file) return;
       try {
         const data = JSON.parse(await file.text());
-        render(data);
+        loadData(data);
         statusEl.textContent = file.name;
       } catch (error) {
         statusEl.textContent = `load failed: ${error.message}`;
       }
     });
+
+    function loadData(data) {
+      loadAnimation(data);
+      render(data);
+    }
+
+    async function loadDefaultData() {
+      try {
+        const response = await fetch("mcmpc_sim_output.json", {cache: "no-store"});
+        if (!response.ok) return;
+        loadData(await response.json());
+        statusEl.textContent = "mcmpc_sim_output.json";
+      } catch (_) {
+        // file://ではfetchできないため、上のファイル選択をそのまま利用する。
+      }
+    }
+    loadDefaultData();
 
     function finiteValues(samples, key) {
       return samples.map((sample) => Number(sample[key])).filter(Number.isFinite);
@@ -136,12 +302,32 @@
       return [min - pad, max + pad];
     }
 
-    function drawAxes(ctx, box, xLabel, yLabel) {
-      ctx.strokeStyle = "#c8d0d8";
+    function drawAxes(ctx, box, xLabel, yLabel, xExtent, yExtent, sx, sy) {
+      ctx.font = "12px ui-monospace, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      for (let i = 0; i <= 5; i++) {
+        const xv = xExtent[0] + (xExtent[1] - xExtent[0]) * i / 5;
+        const yv = yExtent[0] + (yExtent[1] - yExtent[0]) * i / 5;
+        const px = sx(xv), py = sy(yv);
+        ctx.strokeStyle = i === 0 || i === 5 ? "#344556" : "#243140";
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(px, box.y); ctx.lineTo(px, box.y + box.h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(box.x, py); ctx.lineTo(box.x + box.w, py); ctx.stroke();
+        ctx.fillStyle = "#8da0b3";
+        ctx.fillText(xv.toFixed(2), px, box.y + box.h + 7);
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.fillText(yv.toFixed(2), box.x - 9, py);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+      }
+      ctx.strokeStyle = "#627386";
       ctx.lineWidth = 1;
       ctx.strokeRect(box.x, box.y, box.w, box.h);
-      ctx.fillStyle = "#4d5963";
+      ctx.fillStyle = "#a9b8c7";
       ctx.font = "13px system-ui";
+      ctx.textAlign = "left";
       ctx.fillText(xLabel, box.x + box.w - 44, box.y + box.h + 30);
       ctx.save();
       ctx.translate(box.x - 44, box.y + 48);
@@ -150,22 +336,363 @@
       ctx.restore();
     }
 
+    playButton.addEventListener("click", () => {
+      if (!animationSamples.length) return;
+      if (animationIndex >= animationSamples.length - 1) animationIndex = 0;
+      playing = !playing;
+      lastFrameTime = performance.now();
+      playButton.textContent = playing ? "⏸ 停止" : "▶ 再生";
+    });
+    resetButton.addEventListener("click", () => {
+      playing = false;
+      animationIndex = 0;
+      playButton.textContent = "▶ 再生";
+      timeline.value = 0;
+      drawFlight();
+    });
+    timeline.addEventListener("input", () => {
+      animationIndex = Number(timeline.value);
+      playing = false;
+      playButton.textContent = "▶ 再生";
+      drawFlight();
+    });
+
+    function loadAnimation(data) {
+      animationSamples = Array.isArray(data.samples) ? data.samples : [];
+      animationWaypoints = Array.isArray(data.waypoints) ? data.waypoints : [
+        {index:0,x:0,y:0,z:-1}, {index:1,x:.7,y:0,z:-1},
+        {index:2,x:.7,y:.7,z:-1}, {index:3,x:-.7,y:.7,z:-1},
+        {index:4,x:-.7,y:-.7,z:-1}, {index:5,x:.7,y:-.7,z:-1},
+        {index:6,x:.7,y:0,z:-1}, {index:7,x:0,y:0,z:-1},
+        {index:8,x:0,y:0,z:0},
+      ];
+      animationIndex = 0;
+      playing = false;
+      playButton.textContent = "▶ 再生";
+      timeline.max = Math.max(0, animationSamples.length - 1);
+      timeline.value = 0;
+      drawFlight();
+    }
+
+    function rotateByQuaternion(point, sample) {
+      const w = Number(sample.q0), x = Number(sample.q1);
+      const y = Number(sample.q2), z = Number(sample.q3);
+      const px = point[0], py = point[1], pz = point[2];
+      return [
+        (1 - 2*y*y - 2*z*z)*px + (2*x*y - 2*w*z)*py + (2*x*z + 2*w*y)*pz,
+        (2*x*y + 2*w*z)*px + (1 - 2*x*x - 2*z*z)*py + (2*y*z - 2*w*x)*pz,
+        (2*x*z - 2*w*y)*px + (2*y*z + 2*w*x)*py + (1 - 2*x*x - 2*y*y)*pz,
+      ];
+    }
+
+    function animationBounds() {
+      const xs = animationSamples.flatMap(s => [Number(s.x), Number(s.target_x)]).concat(animationWaypoints.map(w => Number(w.x))).filter(Number.isFinite);
+      const ys = animationSamples.flatMap(s => [Number(s.y), Number(s.target_y)]).concat(animationWaypoints.map(w => Number(w.y))).filter(Number.isFinite);
+      const zs = animationSamples.flatMap(s => [-Number(s.z), -Number(s.target_z)]).concat(animationWaypoints.map(w => -Number(w.z))).filter(Number.isFinite);
+      const span = Math.max(2, ...xs.map(Math.abs), ...ys.map(Math.abs), ...zs.map(Math.abs));
+      return span * 1.25;
+    }
+
+    function drawFlight() {
+      const canvas = document.getElementById("flightCanvas");
+      const fitted = fitCanvas(canvas);
+      const ctx = fitted.ctx;
+      const width = fitted.width, height = fitted.height;
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#0d1117";
+      ctx.fillRect(0, 0, width, height);
+      if (!animationSamples.length) return;
+
+      const sample = animationSamples[Math.min(animationIndex, animationSamples.length - 1)];
+      const range = animationBounds();
+      const scale = Math.min(width / (3.1 * range), height / (2.1 * range)) * cameraZoom;
+      const yawCos = Math.cos(cameraYaw), yawSin = Math.sin(cameraYaw);
+      const pitchCos = Math.cos(cameraPitch), pitchSin = Math.sin(cameraPitch);
+      const project = p => {
+        const cameraX = yawCos * p[0] - yawSin * p[1];
+        const cameraDepth = yawSin * p[0] + yawCos * p[1];
+        return [
+          width * .50 + cameraX * scale,
+          height * .72 + cameraDepth * pitchSin * scale - p[2] * pitchCos * scale,
+        ];
+      };
+      const line3 = (a, b, color, lineWidth=1) => {
+        const pa = project(a), pb = project(b);
+        ctx.strokeStyle = color; ctx.lineWidth = lineWidth;
+        ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
+      };
+
+      // Known simulator wall: x=1.0 m, normal=(-1,0,0).
+      const wallCorners = [
+        [1.0, -range, 0.0], [1.0, range, 0.0],
+        [1.0, range, range], [1.0, -range, range],
+      ].map(project);
+      ctx.fillStyle = "rgba(255,92,92,.13)";
+      ctx.strokeStyle = "rgba(255,92,92,.85)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      wallCorners.forEach((p, i) => i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1]));
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+      const wallLabel = project([1.0, -0.9 * range, 0.9 * range]);
+      ctx.fillStyle = "#ff8f8f"; ctx.font = "14px ui-monospace, monospace";
+      ctx.fillText("wall x=1.0 m", wallLabel[0] + 6, wallLabel[1] - 6);
+
+      const gridStep = range > 5 ? 2 : 1;
+      const gridLimit = Math.ceil(range / gridStep) * gridStep;
+      for (let v = -gridLimit; v <= gridLimit; v += gridStep) {
+        line3([-gridLimit, v, 0], [gridLimit, v, 0], v === 0 ? "#3a4a5a" : "#202c3a");
+        line3([v, -gridLimit, 0], [v, gridLimit, 0], v === 0 ? "#3a4a5a" : "#202c3a");
+      }
+      line3([0,0,0], [range*.7,0,0], "#ff5c5c", 2);
+      line3([0,0,0], [0,range*.7,0], "#7ee787", 2);
+      line3([0,0,0], [0,0,range*.7], "#56c8ff", 2);
+
+      ctx.strokeStyle = "rgba(86,200,255,.65)"; ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i <= animationIndex; i++) {
+        const s = animationSamples[i], p = project([Number(s.x), Number(s.y), -Number(s.z)]);
+        if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+      }
+      ctx.stroke();
+
+      if (Array.isArray(sample.prediction) && sample.prediction.length) {
+        ctx.setLineDash([10, 7]);
+        ctx.strokeStyle = "#ffcf5c"; ctx.lineWidth = 3;
+        ctx.beginPath();
+        sample.prediction.forEach((state, i) => {
+          const p = project([Number(state[7]), Number(state[8]), -Number(state[9])]);
+          if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+        });
+        ctx.stroke(); ctx.setLineDash([]);
+        const finalState = sample.prediction.at(-1);
+        const fp = project([Number(finalState[7]), Number(finalState[8]), -Number(finalState[9])]);
+        ctx.fillStyle = "#ffcf5c"; ctx.beginPath(); ctx.arc(fp[0],fp[1],6,0,Math.PI*2); ctx.fill();
+        ctx.font = "13px ui-monospace, monospace";
+        ctx.fillText("MPC horizon end", fp[0] + 9, fp[1] - 9);
+      }
+
+      ctx.setLineDash([8, 7]);
+      ctx.strokeStyle = "rgba(255,111,145,.75)"; ctx.lineWidth = 2;
+      ctx.beginPath();
+      animationWaypoints.forEach((w, i) => {
+        const p = project([Number(w.x), Number(w.y), -Number(w.z)]);
+        if (i === 0) ctx.moveTo(p[0], p[1]); else ctx.lineTo(p[0], p[1]);
+      });
+      ctx.stroke(); ctx.setLineDash([]);
+      animationWaypoints.forEach((w, i) => {
+        const p = project([Number(w.x), Number(w.y), -Number(w.z)]);
+        ctx.fillStyle = "#ff6f91"; ctx.beginPath(); ctx.arc(p[0],p[1],5,0,Math.PI*2); ctx.fill();
+        ctx.fillStyle = "#ffd0dc"; ctx.font = "13px ui-monospace, monospace";
+        ctx.fillText(`W${w.index ?? i}`, p[0] + 8, p[1] - 8);
+      });
+
+      const target = [Number(sample.target_x), Number(sample.target_y), -Number(sample.target_z)];
+      const tp = project(target);
+      ctx.strokeStyle = "#ff6f91"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(tp[0], tp[1], 10, 0, Math.PI*2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(tp[0]-14,tp[1]); ctx.lineTo(tp[0]+14,tp[1]);
+      ctx.moveTo(tp[0],tp[1]-14); ctx.lineTo(tp[0],tp[1]+14); ctx.stroke();
+
+      const center = [Number(sample.x), Number(sample.y), -Number(sample.z)];
+      const arm = Math.max(.12, range * .055);
+      const bodyPoints = [[arm,arm,0],[-arm,-arm,0],[arm,-arm,0],[-arm,arm,0]]
+        .map(p => rotateByQuaternion(p, sample).map((v,i) => v + center[i]));
+      line3(bodyPoints[0], bodyPoints[1], "#ffd24a", 7);
+      line3(bodyPoints[2], bodyPoints[3], "#ffd24a", 7);
+      for (let i = 0; i < bodyPoints.length; i++) {
+        const p = project(bodyPoints[i]);
+        ctx.strokeStyle = i < 2 ? "#ff8c42" : "#56c8ff";
+        ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.ellipse(p[0], p[1], 16, 6, 0, 0, Math.PI*2); ctx.stroke();
+      }
+      const cp = project(center);
+      ctx.fillStyle = "#e6edf3"; ctx.beginPath(); ctx.arc(cp[0],cp[1],7,0,Math.PI*2); ctx.fill();
+      line3(center, [center[0],center[1],0], "rgba(201,212,224,.28)");
+
+      if (sample.collision && Array.isArray(sample.contact_point)) {
+        const contact = project([
+          Number(sample.contact_point[0]), Number(sample.contact_point[1]),
+          -Number(sample.contact_point[2]),
+        ]);
+        ctx.strokeStyle = "#ff3b3b"; ctx.fillStyle = "rgba(255,59,59,.28)";
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(contact[0], contact[1], 13, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(contact[0]-18, contact[1]); ctx.lineTo(contact[0]+18, contact[1]);
+        ctx.moveTo(contact[0], contact[1]-18); ctx.lineTo(contact[0], contact[1]+18); ctx.stroke();
+        ctx.fillStyle = "#ff8f8f"; ctx.font = "13px ui-monospace, monospace";
+        ctx.fillText(`collision J=${Number(sample.collision_impulse).toFixed(3)} N·s`,
+          contact[0] + 18, contact[1] - 18);
+      }
+
+      timeline.value = animationIndex;
+      clock.textContent = `t=${Number(sample.t).toFixed(2)} s`;
+      flightHud.innerHTML =
+        `<b>真値位置 NED</b><br>x=${Number(sample.x).toFixed(3)} m<br>`+
+        `y=${Number(sample.y).toFixed(3)} m<br>z=${Number(sample.z).toFixed(3)} m<br>`+
+        `<b>速度</b> (${Number(sample.vx).toFixed(2)}, ${Number(sample.vy).toFixed(2)}, ${Number(sample.vz).toFixed(2)}) m/s<br>`+
+        `<b>目標</b> (${Number(sample.target_x).toFixed(2)}, ${Number(sample.target_y).toFixed(2)}, ${Number(sample.target_z).toFixed(2)})`+
+        (sample.collision
+          ? `<br><b style="color:#ff8f8f">衝突</b> J=${Number(sample.collision_impulse).toFixed(3)} N·s`+
+            `<br>接触前法線速度=${Number(sample.pre_contact_normal_velocity).toFixed(3)} m/s`
+          : "");
+      drawPredictionPlots(sample);
+    }
+
+    function drawPredictionPlots(sample) {
+      const prediction = Array.isArray(sample.prediction) ? sample.prediction : [];
+      const inputPrediction = Array.isArray(sample.input_prediction)
+        ? sample.input_prediction : [];
+      const quaternionToEuler = values => {
+        const w=Number(values[0]), x=Number(values[1]);
+        const y=Number(values[2]), z=Number(values[3]);
+        const roll = Math.atan2(2*(w*x+y*z), 1-2*(x*x+y*y));
+        const pitchArgument = Math.max(-1, Math.min(1, 2*(w*y-z*x)));
+        const pitch = Math.asin(pitchArgument);
+        const yaw = Math.atan2(2*(w*z+x*y), 1-2*(y*y+z*z));
+        return [roll, pitch, yaw];
+      };
+      const statePlots = [
+        {field:"x",  index:7,  title:"位置 X", unit:"x [m]", color:"#56c8ff", yExtent:[-0.9,0.9]},
+        {field:"vx", index:10, title:"速度 VX", unit:"vx [m/s]", color:"#56c8ff", yExtent:[-0.5,0.5]},
+        {field:"y",  index:8,  title:"位置 Y", unit:"y [m]", color:"#7ee787", yExtent:[-0.9,0.9]},
+        {field:"vy", index:11, title:"速度 VY", unit:"vy [m/s]", color:"#7ee787", yExtent:[-0.5,0.5]},
+        {field:"z",  index:9,  title:"位置 Z", unit:"z [m]", color:"#ff8c42", yExtent:[-1.2,-0.8]},
+        {field:"vz", index:12, title:"速度 VZ", unit:"vz [m/s]", color:"#ff8c42", yExtent:[-0.5,0.5]},
+        {field:"roll", eulerIndex:0, title:"姿勢 ROLL", unit:"roll [deg]", color:"#56c8ff", yExtent:[-30,30]},
+        {field:"wx", index:4,  title:"角速度 WX", unit:"wx [rad/s]", color:"#56c8ff", yExtent:[-1,1]},
+        {field:"pitch",eulerIndex:1, title:"姿勢 PITCH",unit:"pitch [deg]",color:"#7ee787", yExtent:[-30,30]},
+        {field:"wy", index:5,  title:"角速度 WY", unit:"wy [rad/s]", color:"#7ee787", yExtent:[-1,1]},
+        {field:"yaw", eulerIndex:2, title:"姿勢 YAW", unit:"yaw [deg]", color:"#ff8c42", yExtent:[-180,180]},
+        {field:"wz", index:6,  title:"角速度 WZ", unit:"wz [rad/s]", color:"#ff8c42", yExtent:[-1,1]},
+        {field:"ux", inputIndex:0, title:"最適入力 UX", unit:"ux [m]", color:"#56c8ff", yExtent:[-1,1]},
+        {field:"uy", inputIndex:1, title:"最適入力 UY", unit:"uy [m]", color:"#7ee787", yExtent:[-1,1]},
+        {field:"uz", inputIndex:2, title:"最適入力 UZ", unit:"uz [m]", color:"#ff8c42", yExtent:[-1.2,-0.8]},
+        {field:"uyaw",inputIndex:3,title:"最適入力 UYAW",unit:"uyaw [deg]",color:"#c792ea", yExtent:[-30,30]},
+      ];
+      const grid = document.getElementById("predictionGrid");
+      if (grid.children.length !== statePlots.length) {
+        grid.replaceChildren(...statePlots.map(plot => {
+          const wrapper = document.createElement("div");
+          wrapper.className = "prediction-chart";
+          const canvas = document.createElement("canvas");
+          canvas.id = `prediction-${plot.field}`;
+          canvas.width = 1000;
+          canvas.height = 380;
+          wrapper.appendChild(canvas);
+          return wrapper;
+        }));
+      }
+      const canvases = statePlots.map(plot =>
+        document.getElementById(`prediction-${plot.field}`));
+      if (!prediction.length) {
+        for (const canvas of canvases) {
+          const ctx = canvas.getContext("2d");
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = "#8da0b3"; ctx.font = "16px system-ui";
+          ctx.fillText("予測データなし: JSONを再生成してください", 30, 40);
+        }
+        return;
+      }
+      const now = Number(sample.t);
+      const dt = animationSamples.length > 1
+        ? Number(animationSamples[1].t) - Number(animationSamples[0].t) : .02;
+      const horizonSeconds = prediction.length * dt;
+      const windowStart = Math.max(0, now - horizonSeconds);
+      const windowEnd = now + horizonSeconds;
+      const history = animationSamples.filter(s => {
+        const t = Number(s.t);
+        return t >= windowStart && t <= windowEnd;
+      });
+      const actualT = history.map(s => Number(s.t));
+      const predictionT = prediction.map((_, h) => now + h * dt);
+      statePlots.forEach((plot, plotIndex) => {
+        const isEuler = Number.isInteger(plot.eulerIndex);
+        const isInput = Number.isInteger(plot.inputIndex);
+        const radiansToDegrees = value => value * 180 / Math.PI;
+        const truthValues = history.map(s => {
+          if (isEuler) {
+            return radiansToDegrees(quaternionToEuler([s.q0,s.q1,s.q2,s.q3])[plot.eulerIndex]);
+          }
+          if (isInput && plot.field === "uyaw") {
+            return radiansToDegrees(Number(s[plot.field]));
+          }
+          return Number(s[plot.field]);
+        });
+        let predictedValues;
+        if (isInput) {
+          predictedValues = inputPrediction.map(input => {
+            const value = Number(input[plot.inputIndex]);
+            return plot.field === "uyaw" ? radiansToDegrees(value) : value;
+          });
+        } else if (isEuler) {
+          predictedValues = prediction.map(state =>
+            radiansToDegrees(quaternionToEuler(state)[plot.eulerIndex]));
+        } else {
+          predictedValues = prediction.map(state => Number(state[plot.index]));
+        }
+        const hasPrediction = predictedValues.length > 0;
+        const series = [
+          {label: `${plot.field} truth`, x: actualT,
+            y: truthValues, color: plot.color, width: 2.2},
+          {label: `${plot.field} MPC prediction`, x: predictionT.slice(0, predictedValues.length),
+            y: predictedValues,
+            color: "#ffcf5c", width: 2.5, dashed: true},
+        ].filter(item => item.y.length > 0);
+        linePlot(canvases[plotIndex], series, {
+          title: `${plot.title} — 実際値 / MPC 1.4秒予測${hasPrediction ? "" : "（予測なし）"}`,
+          xLabel: "time [s]", yLabel: plot.unit,
+          xExtent: [windowStart, windowEnd], yExtent: plot.yExtent, cursorX: now,
+        });
+      });
+    }
+
+    function animationLoop(timestamp) {
+      if (playing && animationSamples.length > 1) {
+        const dt = Number(animationSamples[1].t) - Number(animationSamples[0].t);
+        const elapsed = (timestamp - lastFrameTime) / 1000 * Number(speedSelect.value);
+        const advance = Math.floor(elapsed / Math.max(dt, 1e-6));
+        if (advance > 0) {
+          animationIndex = Math.min(animationSamples.length - 1, animationIndex + advance);
+          lastFrameTime += advance * dt * 1000 / Number(speedSelect.value);
+          if (animationIndex >= animationSamples.length - 1) {
+            playing = false; playButton.textContent = "▶ 再生";
+          }
+          drawFlight();
+        }
+      }
+      requestAnimationFrame(animationLoop);
+    }
+    requestAnimationFrame(animationLoop);
+
     function linePlot(canvas, series, options) {
-      const ctx = canvas.getContext("2d");
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const box = {x: 70, y: 28, w: canvas.width - 100, h: canvas.height - 78};
+      const fitted = fitCanvas(canvas);
+      const ctx = fitted.ctx;
+      const width = fitted.width, height = fitted.height;
+      ctx.clearRect(0, 0, width, height);
+      const box = {x: 92, y: 76, w: width - 125, h: height - 138};
       const xExtent = options.xExtent || extent(series.flatMap((s) => s.x));
       const yExtent = options.yExtent || extent(series.flatMap((s) => s.y));
       const sx = (x) => box.x + (x - xExtent[0]) / (xExtent[1] - xExtent[0]) * box.w;
       const sy = (y) => box.y + box.h - (y - yExtent[0]) / (yExtent[1] - yExtent[0]) * box.h;
-      drawAxes(ctx, box, options.xLabel, options.yLabel);
-      ctx.fillStyle = "#182026";
-      ctx.font = "16px system-ui";
-      ctx.fillText(options.title, box.x, 18);
+      drawAxes(ctx, box, options.xLabel, options.yLabel, xExtent, yExtent, sx, sy);
+      if (Number.isFinite(options.cursorX)) {
+        const cursor = sx(options.cursorX);
+        ctx.strokeStyle = "rgba(255,255,255,.55)";
+        ctx.lineWidth = 1.5; ctx.setLineDash([4,4]);
+        ctx.beginPath(); ctx.moveTo(cursor, box.y); ctx.lineTo(cursor, box.y + box.h); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.fillStyle = "#e6edf3";
+      ctx.font = "600 18px system-ui";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "alphabetic";
+      ctx.fillText(options.title, box.x, 25);
       for (const item of series) {
         ctx.beginPath();
         ctx.strokeStyle = item.color;
         ctx.lineWidth = item.width || 2;
+        ctx.setLineDash(item.dashed ? [8, 6] : []);
         item.x.forEach((x, index) => {
           const y = item.y[index];
           if (!Number.isFinite(x) || !Number.isFinite(y)) return;
@@ -175,14 +702,28 @@
           else ctx.lineTo(px, py);
         });
         ctx.stroke();
+        ctx.setLineDash([]);
+        if (item.markers) {
+          item.x.forEach((x, index) => {
+            const y = item.y[index];
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+            ctx.fillStyle = item.color;
+            ctx.beginPath(); ctx.arc(sx(x), sy(y), 4, 0, Math.PI * 2); ctx.fill();
+            if (item.pointLabels) {
+              ctx.fillStyle = "#ffd0dc"; ctx.font = "12px ui-monospace, monospace";
+              ctx.fillText(item.pointLabels[index], sx(x) + 6, sy(y) - 7);
+            }
+          });
+        }
       }
-      let legendX = box.x + 8;
+      let legendX = box.x + 4;
       for (const item of series) {
         ctx.fillStyle = item.color;
-        ctx.fillRect(legendX, box.y + 8, 18, 3);
-        ctx.fillStyle = "#4d5963";
-        ctx.fillText(item.label, legendX + 24, box.y + 13);
-        legendX += 110;
+        ctx.fillRect(legendX, 44, 24, 3);
+        ctx.fillStyle = "#c2cfdb";
+        ctx.font = "14px system-ui";
+        ctx.fillText(item.label, legendX + 32, 50);
+        legendX += Math.max(150, ctx.measureText(item.label).width + 58);
       }
     }
 
@@ -203,6 +744,7 @@
       const targetX = finiteValues(samples, "target_x");
       const targetY = finiteValues(samples, "target_y");
       const targetZ = finiteValues(samples, "target_z");
+      const waypoints = Array.isArray(data.waypoints) ? data.waypoints : animationWaypoints;
 
       statsEl.innerHTML = `
         <span>steps: ${samples.length}</span>
@@ -213,12 +755,16 @@
 
       linePlot(document.getElementById("xyCanvas"), [
         {label: "actual", x, y, color: "#1f77b4", width: 2.4},
-        {label: "target", x: targetX, y: targetY, color: "#d62728", width: 1.8},
+        {label: "active target", x: targetX, y: targetY, color: "#ff5c5c", width: 1.8},
+        {label: "wall x=1.0", x: [1.0, 1.0], y: [-0.9, 0.9], color: "#ff8f8f", width: 3},
+        {label: "waypoints", x: waypoints.map(w => Number(w.x)), y: waypoints.map(w => Number(w.y)),
+          color: "#ff6f91", width: 1.8, dashed: true, markers: true,
+          pointLabels: waypoints.map((w,i) => `W${w.index ?? i}`)},
       ], {
         title: "XY trajectory",
         xLabel: "x [m]",
         yLabel: "y [m]",
-        xExtent: [-0.9, 0.9],
+        xExtent: [-1.3, 1.3],
         yExtent: [-0.9, 0.9],
       });
 
@@ -229,6 +775,7 @@
         title: "Z",
         xLabel: "time [s]",
         yLabel: "z [m]",
+        yExtent: [-1.2, -0.8],
       });
 
       linePlot(document.getElementById("inputCanvas"), [
@@ -239,6 +786,7 @@
         title: "MCMPC input setpoints",
         xLabel: "time [s]",
         yLabel: "position input [m]",
+        yExtent: [-1.2, 1.0],
       });
 
       linePlot(document.getElementById("costCanvas"), [

@@ -220,6 +220,142 @@ namespace qc_mcmpc
         bias_torque[2] = trim_torque[2];
     }
 
+#ifdef PREDICTABLE_COLLISION_WITH_WALL
+    __device__ static bool apply_guard_wall_collision(
+        float state[_N_OF_ODES], float omega_body[3],
+        float contact_point_world[3], float& impulse_out,
+        float& pre_contact_normal_velocity_out, bool collision_enabled)
+    {
+        contact_point_world[0] = contact_point_world[1] = contact_point_world[2] = 0.0f;
+        impulse_out = 0.0f;
+        pre_contact_normal_velocity_out = 0.0f;
+        if (!collision_enabled) {
+            return false;
+        }
+        float normal_world[3] = {wall_nv_x_device, wall_nv_y_device, wall_nv_z_device};
+        const float normal_norm = sqrtf(
+            normal_world[0] * normal_world[0] +
+            normal_world[1] * normal_world[1] +
+            normal_world[2] * normal_world[2]);
+        if (normal_norm < 1.0e-6f) {
+            return false;
+        }
+        normal_world[0] /= normal_norm;
+        normal_world[1] /= normal_norm;
+        normal_world[2] /= normal_norm;
+
+        const float q0 = state[0], q1 = state[1], q2 = state[2], q3 = state[3];
+        const float rotation[3][3] = {
+            {1.0f - 2.0f*(q2*q2 + q3*q3), 2.0f*(q1*q2 - q0*q3), 2.0f*(q1*q3 + q0*q2)},
+            {2.0f*(q1*q2 + q0*q3), 1.0f - 2.0f*(q1*q1 + q3*q3), 2.0f*(q2*q3 - q0*q1)},
+            {2.0f*(q1*q3 - q0*q2), 2.0f*(q2*q3 + q0*q1), 1.0f - 2.0f*(q1*q1 + q2*q2)},
+        };
+        float normal_body[3] = {
+            rotation[0][0]*normal_world[0] + rotation[1][0]*normal_world[1] + rotation[2][0]*normal_world[2],
+            rotation[0][1]*normal_world[0] + rotation[1][1]*normal_world[1] + rotation[2][1]*normal_world[2],
+            rotation[0][2]*normal_world[0] + rotation[1][2]*normal_world[1] + rotation[2][2]*normal_world[2],
+        };
+
+        float contact_r_body[3] = {0.0f, 0.0f, 0.0f};
+        float contact_r_world[3] = {0.0f, 0.0f, 0.0f};
+        float minimum_distance = INFINITY;
+        const float desired_guard_angle = atan2f(-normal_body[1], -normal_body[0]);
+        const float half_guard_angle = 0.5f * _GUARD_ARC_ANGLE_RAD;
+        for (int motor = 0; motor < 4; motor++) {
+            const float arm_angle = atan2f(rotor_positions[motor][1], rotor_positions[motor][0]);
+            float angle_error = atan2f(
+                sinf(desired_guard_angle - arm_angle),
+                cosf(desired_guard_angle - arm_angle));
+            angle_error = fminf(fmaxf(angle_error, -half_guard_angle), half_guard_angle);
+            const float guard_angle = arm_angle + angle_error;
+            const float candidate_r_body[3] = {
+                rotor_positions[motor][0] + r_of_ring_device * cosf(guard_angle),
+                rotor_positions[motor][1] + r_of_ring_device * sinf(guard_angle),
+                rotor_positions[motor][2],
+            };
+            const float candidate_r_world[3] = {
+                rotation[0][0]*candidate_r_body[0] + rotation[0][1]*candidate_r_body[1] + rotation[0][2]*candidate_r_body[2],
+                rotation[1][0]*candidate_r_body[0] + rotation[1][1]*candidate_r_body[1] + rotation[1][2]*candidate_r_body[2],
+                rotation[2][0]*candidate_r_body[0] + rotation[2][1]*candidate_r_body[1] + rotation[2][2]*candidate_r_body[2],
+            };
+            const float signed_distance =
+                normal_world[0] * (state[7] + candidate_r_world[0] - x_wall_device) +
+                normal_world[1] * (state[8] + candidate_r_world[1]) +
+                normal_world[2] * (state[9] + candidate_r_world[2]);
+            if (signed_distance < minimum_distance) {
+                minimum_distance = signed_distance;
+                contact_r_body[0] = candidate_r_body[0];
+                contact_r_body[1] = candidate_r_body[1];
+                contact_r_body[2] = candidate_r_body[2];
+                contact_r_world[0] = candidate_r_world[0];
+                contact_r_world[1] = candidate_r_world[1];
+                contact_r_world[2] = candidate_r_world[2];
+            }
+        }
+
+        if (minimum_distance > 0.0f) {
+            return false;
+        }
+
+        // Remove discrete-time penetration before applying the normal impulse.
+        state[7] -= minimum_distance * normal_world[0];
+        state[8] -= minimum_distance * normal_world[1];
+        state[9] -= minimum_distance * normal_world[2];
+        contact_point_world[0] = state[7] + contact_r_world[0];
+        contact_point_world[1] = state[8] + contact_r_world[1];
+        contact_point_world[2] = state[9] + contact_r_world[2];
+
+        const float omega_cross_r[3] = {
+            omega_body[1]*contact_r_body[2] - omega_body[2]*contact_r_body[1],
+            omega_body[2]*contact_r_body[0] - omega_body[0]*contact_r_body[2],
+            omega_body[0]*contact_r_body[1] - omega_body[1]*contact_r_body[0],
+        };
+        const float contact_normal_velocity =
+            state[10]*normal_world[0] + state[11]*normal_world[1] + state[12]*normal_world[2] +
+            omega_cross_r[0]*normal_body[0] + omega_cross_r[1]*normal_body[1] + omega_cross_r[2]*normal_body[2];
+        pre_contact_normal_velocity_out = contact_normal_velocity;
+        if (contact_normal_velocity >= 0.0f) {
+            return true;
+        }
+
+        const float r_cross_n[3] = {
+            contact_r_body[1]*normal_body[2] - contact_r_body[2]*normal_body[1],
+            contact_r_body[2]*normal_body[0] - contact_r_body[0]*normal_body[2],
+            contact_r_body[0]*normal_body[1] - contact_r_body[1]*normal_body[0],
+        };
+        const float inertia_inverse_r_cross_n[3] = {
+            r_cross_n[0] / i_xx_device,
+            r_cross_n[1] / i_yy_device,
+            r_cross_n[2] / i_zz_device,
+        };
+        const float inertia_term_cross_r[3] = {
+            inertia_inverse_r_cross_n[1]*contact_r_body[2] - inertia_inverse_r_cross_n[2]*contact_r_body[1],
+            inertia_inverse_r_cross_n[2]*contact_r_body[0] - inertia_inverse_r_cross_n[0]*contact_r_body[2],
+            inertia_inverse_r_cross_n[0]*contact_r_body[1] - inertia_inverse_r_cross_n[1]*contact_r_body[0],
+        };
+        const float effective_mass_inverse = 1.0f / mass_of_machine_device +
+            inertia_term_cross_r[0]*normal_body[0] +
+            inertia_term_cross_r[1]*normal_body[1] +
+            inertia_term_cross_r[2]*normal_body[2];
+        if (effective_mass_inverse <= 1.0e-9f) {
+            return true;
+        }
+        const float impulse =
+            -(1.0f + coeff_of_rest_device) * contact_normal_velocity / effective_mass_inverse;
+        impulse_out = impulse;
+        state[10] += impulse * normal_world[0] / mass_of_machine_device;
+        state[11] += impulse * normal_world[1] / mass_of_machine_device;
+        state[12] += impulse * normal_world[2] / mass_of_machine_device;
+        omega_body[0] += impulse * inertia_inverse_r_cross_n[0];
+        omega_body[1] += impulse * inertia_inverse_r_cross_n[1];
+        omega_body[2] += impulse * inertia_inverse_r_cross_n[2];
+        state[4] = omega_body[0];
+        state[5] = omega_body[1];
+        state[6] = omega_body[2];
+        return true;
+    }
+#endif
+
     __device__ void input_array::generate_input_array(curandState &state)
     {
 #ifdef USE_INPUT_INTERPOLATION
@@ -294,8 +430,6 @@ namespace qc_mcmpc
         
         // 衝突予測用変数
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
-        bool col_flag = false;
-        float v_plus[3], w_plus[3];
         bool col_constraint_flag = false;
 #endif
         float prev_vel[3];
@@ -340,19 +474,37 @@ namespace qc_mcmpc
         float thrust_setpoint[3];
         float omega_setpoint[3];
 
-        float pred_target_x = target_state_device.x;
-        float pred_target_y = target_state_device.y;
-        float pred_target_z = target_state_device.z;
-        int pred_waypoint_index = square_waypoint_index_device;
-        if (pred_waypoint_index < 0) {
-            pred_waypoint_index = 0;
-        } else if (pred_waypoint_index >= _SQUARE_WAYPOINTS) {
-            pred_waypoint_index = _SQUARE_WAYPOINTS - 1;
+        // Project the current position onto the active path segment.  The scalar
+        // progress on that segment is carried forward as a prediction state.
+        int ref_segment_index = square_waypoint_index_device - 1;
+        ref_segment_index = max(0, min(ref_segment_index, square_waypoint_count_device - 2));
+        const float initial_segment_x =
+            square_waypoints_device[ref_segment_index + 1][0] -
+            square_waypoints_device[ref_segment_index][0];
+        const float initial_segment_y =
+            square_waypoints_device[ref_segment_index + 1][1] -
+            square_waypoints_device[ref_segment_index][1];
+        const float initial_segment_z =
+            square_waypoints_device[ref_segment_index + 1][2] -
+            square_waypoints_device[ref_segment_index][2];
+        const float initial_segment_length_sq =
+            initial_segment_x * initial_segment_x +
+            initial_segment_y * initial_segment_y +
+            initial_segment_z * initial_segment_z;
+        float ref_segment_progress = 0.0f;
+        if (initial_segment_length_sq > 1.0e-12f) {
+            const float projection = (
+                (var_and_z_i_temp[7] - square_waypoints_device[ref_segment_index][0]) * initial_segment_x +
+                (var_and_z_i_temp[8] - square_waypoints_device[ref_segment_index][1]) * initial_segment_y +
+                (var_and_z_i_temp[9] - square_waypoints_device[ref_segment_index][2]) * initial_segment_z
+            ) / initial_segment_length_sq;
+            ref_segment_progress =
+                fminf(fmaxf(projection, 0.0f), 1.0f) * sqrtf(initial_segment_length_sq);
         }
-        float pred_elapsed_since_change = mcmpc_log_device - square_waypoint_change_time_device;
-        bool has_next_pred_waypoint = (pred_waypoint_index + 1 < _SQUARE_WAYPOINTS);
-        float square_waypoint_threshold_sq =
-            _SQUARE_WAYPOINT_THRESHOLD * _SQUARE_WAYPOINT_THRESHOLD;
+        int predicted_mission_index = square_waypoint_index_device;
+        bool predicted_post_collision_phase = false;
+        float post_collision_elapsed = 0.0f;
+        float post_collision_origin[3] = {0.0f, 0.0f, 0.0f};
 
         // ホライズン内で変化しない制御・モデル係数はサンプルごとに一度だけ計算する。
         const bool flying = takeoff_state_device >= takeoff_state_flight_device;
@@ -860,55 +1012,154 @@ namespace qc_mcmpc
             var_and_z_i_temp[5] = w_next[1];
             var_and_z_i_temp[6] = w_next[2];
 
-            // 衝突予測がONのとき，速度と角速度を上書きする
+            // Apply the same guard/plane impact transition to sampled rollouts and
+            // to the deterministic trajectory used as simulator truth.
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
-            if ( col_flag )
-            {
-                col_constraint_flag = true;
-
-                var_and_z_i_temp[10] = v_plus[0];
-                var_and_z_i_temp[11] = v_plus[1];
-                var_and_z_i_temp[12] = v_plus[2];
-
-                // 角速度は機体座標系に変換してから代入
-                var_and_z_i_temp[4] = 2.0f*w_plus[1]*(var_and_z_i_temp[0]*var_and_z_i_temp[3]+var_and_z_i_temp[1]*var_and_z_i_temp[2]) + w_plus[0]*(-1.0f+2.0f*var_and_z_i_temp[0]*var_and_z_i_temp[0]+2.0f*var_and_z_i_temp[1]*var_and_z_i_temp[1]) - 2.0f*w_plus[2]*(var_and_z_i_temp[0]*var_and_z_i_temp[2]-var_and_z_i_temp[1]*var_and_z_i_temp[3]);
-                var_and_z_i_temp[5] = 2.0f*w_plus[2]*(var_and_z_i_temp[0]*var_and_z_i_temp[1]+var_and_z_i_temp[2]*var_and_z_i_temp[3]) + w_plus[1]*(-1.0f+2.0f*var_and_z_i_temp[0]*var_and_z_i_temp[0]+2.0f*var_and_z_i_temp[2]*var_and_z_i_temp[2]) - 2.0f*w_plus[0]*(var_and_z_i_temp[0]*var_and_z_i_temp[3]-var_and_z_i_temp[1]*var_and_z_i_temp[2]);
-                var_and_z_i_temp[6] = 2.0f*w_plus[0]*(var_and_z_i_temp[0]*var_and_z_i_temp[2]+var_and_z_i_temp[1]*var_and_z_i_temp[3]) + w_plus[2]*(-1.0f+2.0f*var_and_z_i_temp[0]*var_and_z_i_temp[0]+2.0f*var_and_z_i_temp[3]*var_and_z_i_temp[3]) - 2.0f*w_plus[1]*(var_and_z_i_temp[0]*var_and_z_i_temp[1]-var_and_z_i_temp[2]*var_and_z_i_temp[3]);
+            float collision_contact_point[3];
+            float collision_impulse = 0.0f;
+            float pre_contact_normal_velocity = 0.0f;
+            const bool collision_event = apply_guard_wall_collision(
+                var_and_z_i_temp, w_next, collision_contact_point,
+                collision_impulse, pre_contact_normal_velocity,
+                sample_id < 0 ? truth_wall_collision_enabled_device != 0
+                              : prediction_wall_collision_enabled_device != 0);
+            col_constraint_flag = col_constraint_flag || collision_event;
+            if (collision_event && !predicted_post_collision_phase &&
+                predicted_mission_index + 1 < square_waypoint_count_device) {
+                predicted_mission_index++;
+                predicted_post_collision_phase = true;
+                post_collision_elapsed = 0.0f;
+                post_collision_origin[0] = var_and_z_i_temp[7];
+                post_collision_origin[1] = var_and_z_i_temp[8];
+                post_collision_origin[2] = var_and_z_i_temp[9];
+            }
+            if (sample_id < 0) {
+                deterministic_sim_collision_device[i] = collision_event ? 1 : 0;
+                deterministic_sim_impulse_device[i] = collision_impulse;
+                deterministic_sim_pre_contact_normal_velocity_device[i] =
+                    pre_contact_normal_velocity;
+                for (int axis = 0; axis < 3; axis++) {
+                    deterministic_sim_contact_point_device[i][axis] =
+                        collision_contact_point[axis];
+                }
             }
 #endif
-            pred_elapsed_since_change += control_period_device;
-            if (has_next_pred_waypoint &&
-                pred_elapsed_since_change >= _SQUARE_WAYPOINT_HOLD_SEC) {
-                float pred_waypoint_dx = pred_target_x - var_and_z_i_temp[7];
-                float pred_waypoint_dy = pred_target_y - var_and_z_i_temp[8];
-                float pred_waypoint_error_sq =
-                    pred_waypoint_dx * pred_waypoint_dx +
-                    pred_waypoint_dy * pred_waypoint_dy;
-                if (pred_waypoint_error_sq < square_waypoint_threshold_sq) {
-                    pred_waypoint_index++;
-                    pred_elapsed_since_change = 0.0f;
-                    has_next_pred_waypoint = (pred_waypoint_index + 1 < _SQUARE_WAYPOINTS);
-                    pred_target_x = square_waypoints_device[pred_waypoint_index][0];
-                    pred_target_y = square_waypoints_device[pred_waypoint_index][1];
-                    pred_target_z = square_waypoints_device[pred_waypoint_index][2];
+            ref_segment_progress += _WAYPOINT_CRUISE_SPEED * control_period_device;
+            float segment_x = 0.0f;
+            float segment_y = 0.0f;
+            float segment_z = 0.0f;
+            float segment_length = 0.0f;
+            while (ref_segment_index < square_waypoint_count_device - 1) {
+                segment_x = square_waypoints_device[ref_segment_index + 1][0] -
+                    square_waypoints_device[ref_segment_index][0];
+                segment_y = square_waypoints_device[ref_segment_index + 1][1] -
+                    square_waypoints_device[ref_segment_index][1];
+                segment_z = square_waypoints_device[ref_segment_index + 1][2] -
+                    square_waypoints_device[ref_segment_index][2];
+                segment_length = sqrtf(
+                    segment_x * segment_x + segment_y * segment_y + segment_z * segment_z);
+                if (segment_length > 1.0e-6f && ref_segment_progress <= segment_length) {
+                    break;
+                }
+                ref_segment_progress = fmaxf(ref_segment_progress - segment_length, 0.0f);
+                if (ref_segment_index >= square_waypoint_count_device - 2) {
+                    ref_segment_progress = segment_length;
+                    break;
+                }
+                ref_segment_index++;
+            }
+
+            float cost_target_x = square_waypoints_device[ref_segment_index][0];
+            float cost_target_y = square_waypoints_device[ref_segment_index][1];
+            float cost_target_z = square_waypoints_device[ref_segment_index][2];
+            float waypoint_velocity_ref[3] = {0.0f, 0.0f, 0.0f};
+            if (segment_length > 1.0e-6f) {
+                const float path_fraction = fminf(ref_segment_progress / segment_length, 1.0f);
+                cost_target_x += path_fraction * segment_x;
+                cost_target_y += path_fraction * segment_y;
+                cost_target_z += path_fraction * segment_z;
+                const bool at_path_end =
+                    ref_segment_index == square_waypoint_count_device - 2 && path_fraction >= 1.0f;
+                if (!at_path_end) {
+                    const float velocity_scale = _WAYPOINT_CRUISE_SPEED / segment_length;
+                    waypoint_velocity_ref[0] = segment_x * velocity_scale;
+                    waypoint_velocity_ref[1] = segment_y * velocity_scale;
+                    waypoint_velocity_ref[2] = segment_z * velocity_scale;
                 }
             }
 
-            float vel_ref_cost[3];
-            vel_ref_cost[0] = mpc_xy_p * (pred_target_x - var_and_z_i_temp[7]);
-            vel_ref_cost[1] = mpc_xy_p * (pred_target_y - var_and_z_i_temp[8]);
-            vel_ref_cost[2] = mpc_z_p  * (pred_target_z - var_and_z_i_temp[9]);
-
-            float vel_ref_cost_xy_norm = sqrtf(
-                vel_ref_cost[0] * vel_ref_cost[0] +
-                vel_ref_cost[1] * vel_ref_cost[1]
-            );
-            if (vel_ref_cost_xy_norm > mpc_xy_vel_max && vel_ref_cost_xy_norm > 1.0e-6f) {
-                float vel_ref_cost_scale = mpc_xy_vel_max / vel_ref_cost_xy_norm;
-                vel_ref_cost[0] *= vel_ref_cost_scale;
-                vel_ref_cost[1] *= vel_ref_cost_scale;
+#ifdef PREDICTABLE_COLLISION_WITH_WALL
+            // After an impact, every rollout immediately pursues the exit waypoint.
+            if (predicted_post_collision_phase &&
+                predicted_mission_index < square_waypoint_count_device) {
+                post_collision_elapsed += control_period_device;
+                const float exit_dx = square_waypoints_device[predicted_mission_index][0] -
+                    post_collision_origin[0];
+                const float exit_dy = square_waypoints_device[predicted_mission_index][1] -
+                    post_collision_origin[1];
+                const float exit_dz = square_waypoints_device[predicted_mission_index][2] -
+                    post_collision_origin[2];
+                const float exit_distance = sqrtf(
+                    exit_dx*exit_dx + exit_dy*exit_dy + exit_dz*exit_dz);
+                if (exit_distance > 1.0e-6f) {
+                    const float exit_progress = fminf(
+                        _WAYPOINT_CRUISE_SPEED * post_collision_elapsed,
+                        exit_distance);
+                    const float exit_fraction = exit_progress / exit_distance;
+                    cost_target_x = post_collision_origin[0] + exit_fraction * exit_dx;
+                    cost_target_y = post_collision_origin[1] + exit_fraction * exit_dy;
+                    cost_target_z = post_collision_origin[2] + exit_fraction * exit_dz;
+                    const float exit_speed = exit_progress < exit_distance
+                        ? _WAYPOINT_CRUISE_SPEED : 0.0f;
+                    waypoint_velocity_ref[0] = exit_speed * exit_dx / exit_distance;
+                    waypoint_velocity_ref[1] = exit_speed * exit_dy / exit_distance;
+                    waypoint_velocity_ref[2] = exit_speed * exit_dz / exit_distance;
+                }
             }
-            vel_ref_cost[2] = fminf(fmaxf(vel_ref_cost[2], -mpc_z_vel_max_down), mpc_z_vel_max_up);
+
+            float collision_mission_cost = 0.0f;
+            if (collision_event) {
+                const int approach_index = max(predicted_mission_index - 1, 0);
+                const float contact_y_error = collision_contact_point[1] -
+                    square_waypoints_device[approach_index][1];
+                const float contact_z_error = collision_contact_point[2] -
+                    square_waypoints_device[approach_index][2];
+                const float contact_x_error = collision_contact_point[0] - x_wall_device;
+                const float contact_velocity_error =
+                    pre_contact_normal_velocity + _CONTACT_APPROACH_SPEED;
+                collision_mission_cost +=
+                    _COST_CONTACT_POSITION * (
+                        contact_x_error*contact_x_error +
+                        contact_y_error*contact_y_error +
+                        contact_z_error*contact_z_error) +
+                    _COST_CONTACT_VELOCITY *
+                        contact_velocity_error * contact_velocity_error;
+            }
+            if (predicted_post_collision_phase) {
+                const float velocity_norm = sqrtf(
+                    var_and_z_i_temp[10]*var_and_z_i_temp[10] +
+                    var_and_z_i_temp[11]*var_and_z_i_temp[11] +
+                    var_and_z_i_temp[12]*var_and_z_i_temp[12]);
+                const float desired_norm = sqrtf(
+                    waypoint_velocity_ref[0]*waypoint_velocity_ref[0] +
+                    waypoint_velocity_ref[1]*waypoint_velocity_ref[1] +
+                    waypoint_velocity_ref[2]*waypoint_velocity_ref[2]);
+                if (velocity_norm > 1.0e-5f && desired_norm > 1.0e-5f) {
+                    const float direction_error_x =
+                        var_and_z_i_temp[10]/velocity_norm - waypoint_velocity_ref[0]/desired_norm;
+                    const float direction_error_y =
+                        var_and_z_i_temp[11]/velocity_norm - waypoint_velocity_ref[1]/desired_norm;
+                    const float direction_error_z =
+                        var_and_z_i_temp[12]/velocity_norm - waypoint_velocity_ref[2]/desired_norm;
+                    collision_mission_cost += _COST_EXIT_DIRECTION * (
+                        direction_error_x*direction_error_x +
+                        direction_error_y*direction_error_y +
+                        direction_error_z*direction_error_z);
+                }
+            }
+#else
+            const float collision_mission_cost = 0.0f;
+#endif
 
             float input_delta_cost = 0.0f;
             if (i > 0) {
@@ -924,24 +1175,25 @@ namespace qc_mcmpc
             }
 
             // コストの計算
-            cost += (_COST_Q_X*(var_and_z_i_temp[7] -pred_target_x )*(var_and_z_i_temp[7] -pred_target_x) + _COST_Q_Y *(var_and_z_i_temp[8] -pred_target_y) *(var_and_z_i_temp[8] -pred_target_y) + _COST_Q_Z *(var_and_z_i_temp[9] -pred_target_z) *(var_and_z_i_temp[9] -pred_target_z)     // x, y, z
-                 +  _COST_Q_XP*(var_and_z_i_temp[10]-target_state_device.xp)*(var_and_z_i_temp[10]-target_state_device.xp)+ _COST_Q_YP*(var_and_z_i_temp[11]-target_state_device.yp)*(var_and_z_i_temp[11]-target_state_device.yp)+ _COST_Q_ZP*(var_and_z_i_temp[12]-target_state_device.zp)*(var_and_z_i_temp[12]-target_state_device.zp)    // xp, yp, zp
+            cost += (_COST_Q_X*(var_and_z_i_temp[7] -cost_target_x )*(var_and_z_i_temp[7] -cost_target_x) + _COST_Q_Y *(var_and_z_i_temp[8] -cost_target_y) *(var_and_z_i_temp[8] -cost_target_y) + _COST_Q_Z *(var_and_z_i_temp[9] -cost_target_z) *(var_and_z_i_temp[9] -cost_target_z)     // x, y, z
+                 +  _COST_Q_XP*(var_and_z_i_temp[10]-waypoint_velocity_ref[0])*(var_and_z_i_temp[10]-waypoint_velocity_ref[0])+ _COST_Q_YP*(var_and_z_i_temp[11]-waypoint_velocity_ref[1])*(var_and_z_i_temp[11]-waypoint_velocity_ref[1])+ _COST_Q_ZP*(var_and_z_i_temp[12]-waypoint_velocity_ref[2])*(var_and_z_i_temp[12]-waypoint_velocity_ref[2])    // xp, yp, zp
                  +  _COST_Q_E1*(var_and_z_i_temp[1] -target_state_device.e1)*(var_and_z_i_temp[1] -target_state_device.e1)+ _COST_Q_E2*(var_and_z_i_temp[2] -target_state_device.e2)*(var_and_z_i_temp[2] -target_state_device.e2)+ _COST_Q_E3*(var_and_z_i_temp[3] -target_state_device.e3)*(var_and_z_i_temp[3] -target_state_device.e3)         // e1, e2, e3
                  +  _COST_Q_WX*(var_and_z_i_temp[4] -target_state_device.wx)*(var_and_z_i_temp[4] -target_state_device.wx)+ _COST_Q_WY*(var_and_z_i_temp[5] -target_state_device.wy)*(var_and_z_i_temp[5] -target_state_device.wy)+ _COST_Q_WZ*(var_and_z_i_temp[6] -target_state_device.wz)*(var_and_z_i_temp[6] -target_state_device.wz)          // wx, wy, wz
-                 +  _COST_R_X*(decoupled_position[i][x]-pred_target_x)*(decoupled_position[i][x]-pred_target_x)
-                 +  _COST_R_Y*(decoupled_position[i][y]-pred_target_y)*(decoupled_position[i][y]-pred_target_y)
-                 +  _COST_R_Z*(decoupled_position[i][z]-pred_target_z)*(decoupled_position[i][z]-pred_target_z)
+                 +  _COST_R_X*(decoupled_position[i][x]-cost_target_x)*(decoupled_position[i][x]-cost_target_x)
+                 +  _COST_R_Y*(decoupled_position[i][y]-cost_target_y)*(decoupled_position[i][y]-cost_target_y)
+                 +  _COST_R_Z*(decoupled_position[i][z]-cost_target_z)*(decoupled_position[i][z]-cost_target_z)
                  +  _COST_R_YAW*(decoupled_position[i][yaw])*(decoupled_position[i][yaw])
                  +  input_delta_cost
+                 +  collision_mission_cost
             );
 
             if (i == _DEVICE_CONST_HORIZON - 1) {
-                float terminal_pos_x = var_and_z_i_temp[7] - pred_target_x;
-                float terminal_pos_y = var_and_z_i_temp[8] - pred_target_y;
-                float terminal_pos_z = var_and_z_i_temp[9] - pred_target_z;
-                float terminal_vel_x = var_and_z_i_temp[10] - vel_ref_cost[0];
-                float terminal_vel_y = var_and_z_i_temp[11] - vel_ref_cost[1];
-                float terminal_vel_z = var_and_z_i_temp[12] - vel_ref_cost[2];
+                float terminal_pos_x = var_and_z_i_temp[7] - cost_target_x;
+                float terminal_pos_y = var_and_z_i_temp[8] - cost_target_y;
+                float terminal_pos_z = var_and_z_i_temp[9] - cost_target_z;
+                float terminal_vel_x = var_and_z_i_temp[10] - waypoint_velocity_ref[0];
+                float terminal_vel_y = var_and_z_i_temp[11] - waypoint_velocity_ref[1];
+                float terminal_vel_z = var_and_z_i_temp[12] - waypoint_velocity_ref[2];
                 cost +=
                     _COST_TERMINAL_X * terminal_pos_x * terminal_pos_x +
                     _COST_TERMINAL_Y * terminal_pos_y * terminal_pos_y +

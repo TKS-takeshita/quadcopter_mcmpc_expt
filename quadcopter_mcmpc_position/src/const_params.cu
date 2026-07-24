@@ -3,6 +3,8 @@
 // double for host programs
 
 int square_waypoint_index = 0;
+int square_waypoint_count = 2;
+float square_waypoint_threshold = _SQUARE_WAYPOINT_THRESHOLD;
 float square_waypoint_change_time = 0.0f;
 
 const bool CONST_PARAM::MPC_ACC_DECOUPLE = false;
@@ -219,8 +221,8 @@ const double CONST_PARAM::ARW_GAIN         = 2.0/CONST_PARAM::MPC_XY_VEL_P_ACC;
 #endif
 
 #if defined(UNPREDICTABLE_COLLISION_WITH_WALL) || defined(PREDICTABLE_COLLISION_WITH_WALL)
-    const double CONST_PARAM::X_WALL               = -1.0;  // m
-    const double CONST_PARAM::WALL_NORMAL_VECTOR_X = 1.0;   // no units
+    const double CONST_PARAM::X_WALL               = 1.0;   // m
+    const double CONST_PARAM::WALL_NORMAL_VECTOR_X = -1.0;  // free space is x < X_WALL
     const double CONST_PARAM::WALL_NORMAL_VECTOR_Y = 0.0;   // no units
     const double CONST_PARAM::WALL_NORMAL_VECTOR_Z = 0.0;   // no units
     const double CONST_PARAM::R_OF_RING            = 0.135; // m
@@ -419,21 +421,22 @@ const int CONST_PARAM_FLOAT::MOTOR_COMMAND_DELAY_STEPS  = CONST_PARAM::MOTOR_COM
 const int CONST_PARAM_FLOAT::TAKEOFF_STATE_RAMPUP       = CONST_PARAM::TAKEOFF_STATE_RAMPUP;
 const int CONST_PARAM_FLOAT::TAKEOFF_STATE_FLIGHT       = CONST_PARAM::TAKEOFF_STATE_FLIGHT;
 
+// const float CONST_PARAM_FLOAT::square_waypoints[_SQUARE_WAYPOINTS][3] = {
+//     {0.0f, 0.0f, -1.0f},
+//     {0.7f, 0.0f, -1.0f},
+//     {0.7f, 0.7f, -1.0f},
+//     {-0.7f, 0.7f, -1.0f},
+//     {-0.7f, -0.7f, -1.0f},
+//     {0.7f, -0.7f, -1.0f},
+//     {0.7f, 0.0f, -1.0f},
+//     {0.0f, 0.0f, -1.0f},
+//     {0.0f, 0.0f, 0.0f}
+// };
+
 const float CONST_PARAM_FLOAT::square_waypoints[_SQUARE_WAYPOINTS][3] = {
     {0.0f, 0.0f, -1.0f},
-    {0.7f, 0.0f, -1.0f},
-    {0.7f, 0.7f, -1.0f},
-    {-0.7f, 0.7f, -1.0f},
-    {-0.7f, -0.7f, -1.0f},
-    {0.7f, -0.7f, -1.0f},
-    {0.7f, 0.0f, -1.0f},
-    {0.0f, 0.0f, -1.0f},
-    {0.0f, 0.0f, 0.0f}
+    {0.7f, 0.0f, -1.0f}
 };
-
-// const float CONST_PARAM_FLOAT::square_waypoints[_SQUARE_WAYPOINTS][3] = {
-//     {0.0f, 0.0f, -1.0f}
-// };
 const float CONST_PARAM_FLOAT::LPF              = (float)CONST_PARAM::LPF;
 const float CONST_PARAM_FLOAT::ARW_GAIN         = (float)CONST_PARAM::ARW_GAIN;
 

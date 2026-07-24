@@ -108,6 +108,8 @@ namespace qc_mcmpc
     target_state_t target_host;
 
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
+	__constant__ int prediction_wall_collision_enabled_device;
+	__constant__ int truth_wall_collision_enabled_device;
 	__constant__ float x_wall_device;
 	__constant__ float wall_nv_x_device;
 	__constant__ float wall_nv_y_device;
@@ -132,6 +134,12 @@ namespace qc_mcmpc
     __device__ float deterministic_sim_omega_setpoint_device[_DEVICE_CONST_HORIZON][3];
     __device__ float deterministic_sim_torque_setpoint_device[_DEVICE_CONST_HORIZON][3];
     __device__ float deterministic_sim_motor_setpoint_device[_DEVICE_CONST_HORIZON][4];
+#ifdef PREDICTABLE_COLLISION_WITH_WALL
+    __device__ int deterministic_sim_collision_device[_DEVICE_CONST_HORIZON];
+    __device__ float deterministic_sim_contact_point_device[_DEVICE_CONST_HORIZON][3];
+    __device__ float deterministic_sim_impulse_device[_DEVICE_CONST_HORIZON];
+    __device__ float deterministic_sim_pre_contact_normal_velocity_device[_DEVICE_CONST_HORIZON];
+#endif
 
     __constant__ float var_and_z_i_device[_N_OF_ODES];
     __constant__ input_array average_input_device;
@@ -140,6 +148,8 @@ namespace qc_mcmpc
     __constant__ float square_waypoint_change_time_device;
     __constant__ float mcmpc_log_device;
     __constant__ float square_waypoints_device[_SQUARE_WAYPOINTS][3];
+    __constant__ int square_waypoint_count_device;
+    __constant__ float square_waypoint_threshold_device;
     __constant__ int takeoff_state_device;
     __constant__ float takeoff_tilt_limit_device;
     __constant__ int landed_device;
@@ -299,6 +309,8 @@ namespace qc_mcmpc
         cudaMemcpyToSymbol(mpc_tilt_max_device, &CONST_PARAM_FLOAT::MPC_TILT_MAX, sizeof(float));
 
         cudaMemcpyToSymbol( square_waypoints_device,    CONST_PARAM_FLOAT::square_waypoints,            sizeof(CONST_PARAM_FLOAT::square_waypoints) );
+        cudaMemcpyToSymbol(square_waypoint_count_device, &square_waypoint_count, sizeof(int));
+        cudaMemcpyToSymbol(square_waypoint_threshold_device, &square_waypoint_threshold, sizeof(float));
 
         {
             int takeoff_state_init = CONST_PARAM_FLOAT::TAKEOFF_STATE_FLIGHT;
@@ -314,6 +326,9 @@ namespace qc_mcmpc
         }
 
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
+        const int wall_collision_enabled = 1;
+        cudaMemcpyToSymbol( prediction_wall_collision_enabled_device, &wall_collision_enabled, sizeof( int ) );
+        cudaMemcpyToSymbol( truth_wall_collision_enabled_device, &wall_collision_enabled,      sizeof( int ) );
         cudaMemcpyToSymbol( x_wall_device,        &CONST_PARAM_FLOAT::X_WALL,               sizeof( float ) );
         cudaMemcpyToSymbol( wall_nv_x_device,     &CONST_PARAM_FLOAT::WALL_NORMAL_VECTOR_X, sizeof( float ) );
         cudaMemcpyToSymbol( wall_nv_y_device,     &CONST_PARAM_FLOAT::WALL_NORMAL_VECTOR_Y, sizeof( float ) );

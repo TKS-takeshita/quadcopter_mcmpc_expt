@@ -1,0 +1,6 @@
+# Runtime waypoint configuration (NED coordinates, metres)
+threshold,0.05
+x,y,z
+0.0,0.0,-1.0
+1.2,0.0,-1.0
+0.0,0.7,-1.0

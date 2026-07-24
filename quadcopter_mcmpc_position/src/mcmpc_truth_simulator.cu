@@ -222,10 +222,14 @@ private:
 
         px4_msgs::msg::VehicleOdometry odom;
         odom.timestamp = now_us;
+        odom.timestamp_sample = now_us;
+        odom.pose_frame = px4_msgs::msg::VehicleOdometry::POSE_FRAME_NED;
+        odom.velocity_frame = px4_msgs::msg::VehicleOdometry::VELOCITY_FRAME_NED;
         odom.q = {state_[kStateQ0], state_[kStateQ0 + 1], state_[kStateQ0 + 2], state_[kStateQ0 + 3]};
         odom.angular_velocity = {state_[kStateWx], state_[kStateWx + 1], state_[kStateWx + 2]};
         odom.position = {state_[kStateX], state_[kStateX + 1], state_[kStateX + 2]};
         odom.velocity = {state_[kStateVx], state_[kStateVx + 1], state_[kStateVx + 2]};
+        odom.quality = 100;
         odom_pub_->publish(odom);
 
         px4_msgs::msg::VehicleLocalPositionSetpoint local_sp;

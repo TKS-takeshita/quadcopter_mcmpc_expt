@@ -56,8 +56,11 @@ static int motor_speed_valid_host_for_model = 0;
 
 #include "quadcopter_mcmpc_position/const_params.hpp"
 #include "quadcopter_mcmpc_position/mcmpc_controller.cuh"
+#include "quadcopter_mcmpc_position/waypoint_config.hpp"
 
 using namespace qc_mcmpc;
+
+static qc_mcmpc::WaypointConfig runtime_waypoint_config;
 
 static constexpr bool USE_REALTIME_ACCELERATION_BIAS_OBSERVER = true;
 static constexpr bool USE_REALTIME_VELOCITY_DELTA_BIAS_OBSERVER = true;
@@ -70,10 +73,6 @@ static float nominal_acc_host_for_model[3] = {0.0f, 0.0f, 0.0f};
 static float measured_acc_host_for_model[3] = {0.0f, 0.0f, 0.0f};
 static float prev_log_velocity_host_for_bias[3] = {0.0f, 0.0f, 0.0f};
 static bool has_prev_log_velocity_host_for_bias = false;
-
-#if defined(UNPREDICTABLE_COLLISION_WITH_WALL) || defined(PREDICTABLE_COLLISION_WITH_WALL)
-#include <Eigen/Dense>
-#endif
 
 enum class ControlMode {
     PX4_POSITION,
@@ -291,14 +290,14 @@ void set_square_waypoint(int index)
     if (index < SQUARE_START_WAYPOINT_INDEX) {
         index = SQUARE_START_WAYPOINT_INDEX;
     }
-    if (index >= _SQUARE_WAYPOINTS) {
-        index = _SQUARE_WAYPOINTS - 1;
+    if (index >= runtime_waypoint_config.count) {
+        index = runtime_waypoint_config.count - 1;
     }
     square_waypoint_index = index;
     square_waypoint_change_time = mcmpc_log;
-    target_host.x = CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][0];
-    target_host.y = CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][1];
-    target_host.z = CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][2];
+    target_host.x = runtime_waypoint_config.points[square_waypoint_index][0];
+    target_host.y = runtime_waypoint_config.points[square_waypoint_index][1];
+    target_host.z = runtime_waypoint_config.points[square_waypoint_index][2];
     set_target_yaw(0.0f);
     update_target_state_device();
     cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_index_device, &square_waypoint_index, sizeof(int));
@@ -307,7 +306,7 @@ void set_square_waypoint(int index)
     RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
         "square waypoint %d/%d: x=%f y=%f z=%f",
         square_waypoint_index + 1,
-        _SQUARE_WAYPOINTS,
+        runtime_waypoint_config.count,
         target_host.x,
         target_host.y,
         target_host.z);
@@ -603,6 +602,29 @@ int main(int argc, char *argv[])
     // quad_sim_base::init_values();
     rclcpp::init(argc, argv);
     auto node = rclcpp::Node::make_shared("quadcopter_mcmpc");
+    node->declare_parameter<std::string>("waypoints_file", "");
+    node->declare_parameter<double>("waypoint_threshold", -1.0);
+    try {
+        const std::string waypoint_file = node->get_parameter("waypoints_file").as_string();
+        runtime_waypoint_config = waypoint_file.empty()
+            ? qc_mcmpc::default_waypoint_config()
+            : qc_mcmpc::load_waypoint_csv(waypoint_file);
+    } catch (const std::exception& error) {
+        RCLCPP_FATAL(node->get_logger(), "%s", error.what());
+        rclcpp::shutdown();
+        return 1;
+    }
+    const double threshold_override = node->get_parameter("waypoint_threshold").as_double();
+    if (threshold_override > 0.0) {
+        runtime_waypoint_config.threshold = static_cast<float>(threshold_override);
+    }
+    square_waypoint_count = runtime_waypoint_config.count;
+    square_waypoint_threshold = runtime_waypoint_config.threshold;
+    qc_mcmpc::mcmpc_controller::get_instance();
+    cudaMemcpyToSymbol(qc_mcmpc::square_waypoints_device, runtime_waypoint_config.points.data(), sizeof(runtime_waypoint_config.points));
+    cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_count_device, &square_waypoint_count, sizeof(int));
+    cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_threshold_device, &square_waypoint_threshold, sizeof(float));
+    RCLCPP_INFO(node->get_logger(), "loaded %d runtime waypoints, threshold=%.3f m", square_waypoint_count, square_waypoint_threshold);
     auto qos  = rclcpp::QoS(10).reliability(rclcpp::ReliabilityPolicy::BestEffort);
     auto attitude_thrust_pub = node->create_publisher<px4_msgs::msg::VehicleAttitudeSetpoint>("/fmu/in/vehicle_attitude_setpoint", qos);
     auto rate_thrust_pub = node->create_publisher<px4_msgs::msg::VehicleRatesSetpoint>("/fmu/in/vehicle_rates_setpoint", qos);
@@ -872,10 +894,10 @@ int main(int argc, char *argv[])
             float dy = target_host.y - quad_sim_base::var_array_to_integrate[8];
             float waypoint_error_sq = dx * dx + dy * dy;
             float square_waypoint_threshold_sq =
-                _SQUARE_WAYPOINT_THRESHOLD * _SQUARE_WAYPOINT_THRESHOLD;
+                square_waypoint_threshold * square_waypoint_threshold;
             if ((mcmpc_log - square_waypoint_change_time) >= _SQUARE_WAYPOINT_HOLD_SEC &&
                 waypoint_error_sq < square_waypoint_threshold_sq &&
-                square_waypoint_index + 1 < _SQUARE_WAYPOINTS) {
+                square_waypoint_index + 1 < square_waypoint_count) {
                 set_square_waypoint(square_waypoint_index + 1);
             }
 

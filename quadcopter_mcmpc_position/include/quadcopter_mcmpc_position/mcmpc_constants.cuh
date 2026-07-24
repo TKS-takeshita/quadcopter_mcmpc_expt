@@ -123,6 +123,8 @@ namespace qc_mcmpc{
     extern __constant__ float square_waypoint_change_time_device;
     extern __constant__ float mcmpc_log_device;
     extern __constant__ float square_waypoints_device[_SQUARE_WAYPOINTS][3];
+    extern __constant__ int square_waypoint_count_device;
+    extern __constant__ float square_waypoint_threshold_device;
     extern __constant__ int takeoff_state_device;
     extern __constant__ float takeoff_tilt_limit_device;
     extern __constant__ int landed_device;
@@ -177,6 +179,12 @@ namespace qc_mcmpc{
     extern __device__ float deterministic_sim_omega_setpoint_device[_DEVICE_CONST_HORIZON][3];
     extern __device__ float deterministic_sim_torque_setpoint_device[_DEVICE_CONST_HORIZON][3];
     extern __device__ float deterministic_sim_motor_setpoint_device[_DEVICE_CONST_HORIZON][4];
+#ifdef PREDICTABLE_COLLISION_WITH_WALL
+    extern __device__ int deterministic_sim_collision_device[_DEVICE_CONST_HORIZON];
+    extern __device__ float deterministic_sim_contact_point_device[_DEVICE_CONST_HORIZON][3];
+    extern __device__ float deterministic_sim_impulse_device[_DEVICE_CONST_HORIZON];
+    extern __device__ float deterministic_sim_pre_contact_normal_velocity_device[_DEVICE_CONST_HORIZON];
+#endif
 
     __global__ void simulate_best_input_trajectory_kernel(input_array best_input);
 
@@ -190,6 +198,8 @@ namespace qc_mcmpc{
     extern target_state_t target_host;
 
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
+    extern __constant__ int prediction_wall_collision_enabled_device;
+    extern __constant__ int truth_wall_collision_enabled_device;
     extern __constant__ float x_wall_device;
     extern __constant__ float wall_nv_x_device;
     extern __constant__ float wall_nv_y_device;

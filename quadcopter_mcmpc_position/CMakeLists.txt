@@ -37,7 +37,20 @@ add_library(mcmpc_core SHARED
   src/const_params.cu
 )
 
+# The simulator executables read CUDA device symbols directly. Those symbols
+# cannot be addressed reliably across the mcmpc_core shared-library boundary,
+# so link the unchanged model sources into a simulator-only static CUDA core.
+add_library(mcmpc_sim_core STATIC
+  src/mcmpc_controller.cu
+  src/const_params.cu
+)
+
 set_target_properties(mcmpc_core PROPERTIES
+  CUDA_SEPARABLE_COMPILATION ON
+  POSITION_INDEPENDENT_CODE ON
+)
+
+set_target_properties(mcmpc_sim_core PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
   POSITION_INDEPENDENT_CODE ON
 )
@@ -47,12 +60,29 @@ target_include_directories(mcmpc_core PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 
+target_include_directories(mcmpc_sim_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
 target_link_libraries(mcmpc_core
   ${CUDA_LIBRARIES}
   curand
 )
 
+target_link_libraries(mcmpc_sim_core
+  ${CUDA_LIBRARIES}
+  curand
+)
+
 ament_target_dependencies(mcmpc_core
+  rclcpp
+  px4_msgs
+  sensor_msgs
+  std_msgs
+)
+
+ament_target_dependencies(mcmpc_sim_core
   rclcpp
   px4_msgs
   sensor_msgs
@@ -104,11 +134,11 @@ target_link_libraries(quad_mcmpc_node
 )
 
 target_link_libraries(mcmpc_standalone_simulator
-  mcmpc_core
+  mcmpc_sim_core
 )
 
 target_link_libraries(mcmpc_truth_simulator
-  mcmpc_core
+  mcmpc_sim_core
 )
 
 ament_target_dependencies(mcmpc_sim_joy_starter
@@ -138,7 +168,7 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY launch
+install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
 )
 

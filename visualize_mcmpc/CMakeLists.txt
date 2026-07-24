@@ -16,6 +16,7 @@ find_package(rosidl_default_generators REQUIRED)
 
 install(PROGRAMS
   scripts/mcmpc_viewer.py
+  scripts/verify_mcmpc_sim.py
   DESTINATION lib/${PROJECT_NAME}
 )
 install(DIRECTORY launch rviz

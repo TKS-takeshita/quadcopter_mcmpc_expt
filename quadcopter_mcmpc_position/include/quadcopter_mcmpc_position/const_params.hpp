@@ -5,7 +5,7 @@
 
 //#define UNPREDICTABLE_IMPULSE
 //#define UNPREDICTABLE_COLLISION_WITH_WALL
-//#define PREDICTABLE_COLLISION_WITH_WALL
+#define PREDICTABLE_COLLISION_WITH_WALL
 //#define MCMPC_WITH_FORCE_STATE
 
 //#define SIMULATION
@@ -24,17 +24,19 @@
 #define _DEVICE_CONST_THREAD_PER_BLOCK 	128 //_DEVICE_CONST_THREAD_PER_BLOCK * N_OF_BLOCK = N_OF_SAMPLES
 #define _DEVICE_CONST_N_OF_BLOCK 		64
 
-#define _SQUARE_WAYPOINTS               9
-#define _SQUARE_WAYPOINT_THRESHOLD      0.15f
+#define _SQUARE_WAYPOINTS               32 // runtime-configurable maximum
+#define _SQUARE_WAYPOINT_THRESHOLD      0.05f // fallback default
 #define _SQUARE_WAYPOINT_HOLD_SEC       0.0f
+#define _WAYPOINT_CRUISE_SPEED           0.30f // m/s, zero only at the final waypoint
+#define _GUARD_ARC_ANGLE_RAD              (92.1f * _PI_FROAT / 180.0f)
 
 // cost for MPC
-#define _COST_Q_X 		1.0f
-#define _COST_Q_Y 		1.0f
-#define _COST_Q_Z 		1.0f
-#define _COST_Q_XP 		0.0f
-#define _COST_Q_YP 		0.0f
-#define _COST_Q_ZP 		0.0f
+#define _COST_Q_X 		4.0f
+#define _COST_Q_Y 		4.0f
+#define _COST_Q_Z 		6.0f
+#define _COST_Q_XP 		3.0f
+#define _COST_Q_YP 		3.0f
+#define _COST_Q_ZP 		5.0f
 #define _COST_Q_E1 		0.0f
 #define _COST_Q_E2 		0.0f
 #define _COST_Q_E3 		0.0f
@@ -42,20 +44,24 @@
 #define _COST_Q_WY 		0.0f
 #define _COST_Q_WZ 		0.0f
 #define _COST_Q_ZI 		0.0f
-#define _COST_R_X 		0.0f
-#define _COST_R_Y 	    0.0f
-#define _COST_R_Z 	    0.0f
-#define _COST_R_YAW 	0.0f
-#define _COST_TERMINAL_X 	30.0f
-#define _COST_TERMINAL_Y 	30.0f
-#define _COST_TERMINAL_Z 	30.0f
-#define _COST_TERMINAL_VX 	5.0f
-#define _COST_TERMINAL_VY 	5.0f
-#define _COST_TERMINAL_VZ 	5.0f
-#define _COST_DU_X 		0.0f
-#define _COST_DU_Y 		0.0f
-#define _COST_DU_Z 		0.0f
-#define _COST_DU_YAW 	0.0f
+#define _COST_R_X 		0.25f
+#define _COST_R_Y 	    0.25f
+#define _COST_R_Z 	    0.50f
+#define _COST_R_YAW 	0.05f
+#define _COST_TERMINAL_X 	80.0f
+#define _COST_TERMINAL_Y 	80.0f
+#define _COST_TERMINAL_Z 	100.0f
+#define _COST_TERMINAL_VX 	25.0f
+#define _COST_TERMINAL_VY 	25.0f
+#define _COST_TERMINAL_VZ 	30.0f
+#define _COST_DU_X 		2.0f
+#define _COST_DU_Y 		2.0f
+#define _COST_DU_Z 		4.0f
+#define _COST_DU_YAW 	0.25f
+#define _COST_CONTACT_POSITION  1.0f
+#define _COST_CONTACT_VELOCITY  0.5f
+#define _COST_EXIT_DIRECTION    2.0f
+#define _CONTACT_APPROACH_SPEED 0.30f
 #ifdef MCMPC_WITH_FORCE_STATE
     #define _COST_Q_FX  1.0f
     #define _COST_Q_FY  1.0f
@@ -67,6 +73,8 @@
 extern int square_waypoint_index;
 extern float square_waypoint_change_time;
 extern float mcmpc_log;
+extern int square_waypoint_count;
+extern float square_waypoint_threshold;
 
 struct CONST_PARAM
 {

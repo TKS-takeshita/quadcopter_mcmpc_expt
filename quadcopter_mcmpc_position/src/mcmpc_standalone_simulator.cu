@@ -11,6 +11,7 @@
 
 #include "quadcopter_mcmpc_position/mcmpc_controller.cuh"
 #include "quadcopter_mcmpc_position/const_params.hpp"
+#include "quadcopter_mcmpc_position/waypoint_config.hpp"
 
 namespace
 {
@@ -25,7 +26,13 @@ struct Options
     int steps = 300;
     std::string output =
         "visualize_mcmpc/simulator/mcmpc_sim_output.json";
+    std::string waypoints;
+    float waypoint_threshold = -1.0f;
+    bool prediction_wall_collision = true;
+    bool truth_wall_collision = true;
 };
+
+qc_mcmpc::WaypointConfig waypoint_config;
 
 void check_cuda(cudaError_t err, const char* label)
 {
@@ -43,10 +50,37 @@ Options parse_args(int argc, char** argv)
             options.steps = std::max(1, std::atoi(argv[++i]));
         } else if (std::strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
             options.output = argv[++i];
+        } else if (std::strcmp(argv[i], "--waypoints") == 0 && i + 1 < argc) {
+            options.waypoints = argv[++i];
+        } else if (std::strcmp(argv[i], "--waypoint-threshold") == 0 && i + 1 < argc) {
+            options.waypoint_threshold = std::atof(argv[++i]);
+        } else if (std::strcmp(argv[i], "--wall-collision") == 0 && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (value == "on") {
+                options.prediction_wall_collision = true;
+            } else if (value == "off") {
+                options.prediction_wall_collision = false;
+            } else {
+                std::cerr << "--wall-collision must be on or off\n";
+                std::exit(1);
+            }
+        } else if (std::strcmp(argv[i], "--truth-wall-collision") == 0 && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (value == "on") {
+                options.truth_wall_collision = true;
+            } else if (value == "off") {
+                options.truth_wall_collision = false;
+            } else {
+                std::cerr << "--truth-wall-collision must be on or off\n";
+                std::exit(1);
+            }
         } else if (std::strcmp(argv[i], "--help") == 0) {
             std::cout
                 << "Usage: mcmpc_standalone_simulator "
-                << "[--steps N] [--output path.json]\n";
+                << "[--steps N] [--output path.json] "
+                << "[--waypoints path.csv] [--waypoint-threshold metres] "
+                << "[--wall-collision on|off] [--truth-wall-collision on|off]\n"
+                << "  --wall-collision controls the MPC prediction model; truth defaults to on.\n";
             std::exit(0);
         }
     }
@@ -75,17 +109,17 @@ void set_square_waypoint(int index, float sim_time)
     if (index < kSquareStartWaypointIndex) {
         index = kSquareStartWaypointIndex;
     }
-    if (index >= _SQUARE_WAYPOINTS) {
-        index = _SQUARE_WAYPOINTS - 1;
+    if (index >= waypoint_config.count) {
+        index = waypoint_config.count - 1;
     }
     square_waypoint_index = index;
     square_waypoint_change_time = sim_time;
     qc_mcmpc::target_host.x =
-        CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][0];
+        waypoint_config.points[square_waypoint_index][0];
     qc_mcmpc::target_host.y =
-        CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][1];
+        waypoint_config.points[square_waypoint_index][1];
     qc_mcmpc::target_host.z =
-        CONST_PARAM_FLOAT::square_waypoints[square_waypoint_index][2];
+        waypoint_config.points[square_waypoint_index][2];
     qc_mcmpc::target_host.xp = 0.0f;
     qc_mcmpc::target_host.yp = 0.0f;
     qc_mcmpc::target_host.zp = 0.0f;
@@ -180,7 +214,13 @@ void write_json_state(
     double input_y,
     double input_z,
     double input_yaw,
-    float cost)
+    float cost,
+    bool collision,
+    const float contact_point[3],
+    float collision_impulse,
+    float pre_contact_normal_velocity,
+    const float prediction[_DEVICE_CONST_HORIZON][_N_OF_ODES],
+    const qc_mcmpc::input_array& input_prediction)
 {
     if (step > 0) {
         out << ",\n";
@@ -209,7 +249,37 @@ void write_json_state(
         << ",\"target_z\":" << qc_mcmpc::target_host.z
         << ",\"waypoint_index\":" << square_waypoint_index
         << ",\"cost\":" << cost
-        << "}";
+        << ",\"collision\":" << (collision ? "true" : "false")
+        << ",\"contact_point\":[" << contact_point[0] << ","
+        << contact_point[1] << "," << contact_point[2] << "]"
+        << ",\"collision_impulse\":" << collision_impulse
+        << ",\"pre_contact_normal_velocity\":" << pre_contact_normal_velocity
+        << ",\"prediction\":[";
+    for (int h = 0; h < _DEVICE_CONST_HORIZON; h++) {
+        if (h > 0) {
+            out << ",";
+        }
+        out << "[";
+        for (int state_index = 0; state_index < _N_OF_ODES; state_index++) {
+            if (state_index > 0) {
+                out << ",";
+            }
+            out << prediction[h][state_index];
+        }
+        out << "]";
+    }
+    out << "],\"input_prediction\":[";
+    for (int h = 0; h < _DEVICE_CONST_HORIZON; h++) {
+        if (h > 0) {
+            out << ",";
+        }
+        out << "["
+            << input_prediction.decoupled_position[h][x] << ","
+            << input_prediction.decoupled_position[h][y] << ","
+            << input_prediction.decoupled_position[h][z] << ","
+            << input_prediction.decoupled_position[h][yaw] << "]";
+    }
+    out << "]}";
 }
 }
 
@@ -218,6 +288,35 @@ int main(int argc, char** argv)
     const Options options = parse_args(argc, argv);
     qc_mcmpc::mcmpc_controller& controller =
         qc_mcmpc::mcmpc_controller::get_instance();
+    try {
+        waypoint_config = options.waypoints.empty()
+            ? qc_mcmpc::default_waypoint_config()
+            : qc_mcmpc::load_waypoint_csv(options.waypoints);
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << std::endl;
+        return 1;
+    }
+    if (options.waypoint_threshold > 0.0f) {
+        waypoint_config.threshold = options.waypoint_threshold;
+    }
+    square_waypoint_count = waypoint_config.count;
+    square_waypoint_threshold = waypoint_config.threshold;
+    check_cuda(cudaMemcpyToSymbol(qc_mcmpc::square_waypoints_device, waypoint_config.points.data(), sizeof(waypoint_config.points)), "copy runtime waypoints");
+    check_cuda(cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_count_device, &square_waypoint_count, sizeof(int)), "copy runtime waypoint count");
+    check_cuda(cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_threshold_device, &square_waypoint_threshold, sizeof(float)), "copy runtime waypoint threshold");
+#ifdef PREDICTABLE_COLLISION_WITH_WALL
+    const int prediction_wall_collision_enabled =
+        options.prediction_wall_collision ? 1 : 0;
+    const int truth_wall_collision_enabled = options.truth_wall_collision ? 1 : 0;
+    check_cuda(cudaMemcpyToSymbol(
+        qc_mcmpc::prediction_wall_collision_enabled_device,
+        &prediction_wall_collision_enabled,
+        sizeof(prediction_wall_collision_enabled)), "copy prediction wall collision mode");
+    check_cuda(cudaMemcpyToSymbol(
+        qc_mcmpc::truth_wall_collision_enabled_device,
+        &truth_wall_collision_enabled,
+        sizeof(truth_wall_collision_enabled)), "copy truth wall collision mode");
+#endif
     reset_model_context();
 
     float state[_N_OF_ODES] = {
@@ -241,14 +340,33 @@ int main(int argc, char** argv)
     out << "{\n"
         << "  \"dt\":" << CONST_PARAM_FLOAT::CONTROL_PERIOD << ",\n"
         << "  \"horizon\":" << _DEVICE_CONST_HORIZON << ",\n"
+        << "  \"wall_collision_enabled\":"
+        << (options.prediction_wall_collision ? "true" : "false") << ",\n"
+        << "  \"prediction_wall_collision_enabled\":"
+        << (options.prediction_wall_collision ? "true" : "false") << ",\n"
+        << "  \"truth_wall_collision_enabled\":"
+        << (options.truth_wall_collision ? "true" : "false") << ",\n"
+        << "  \"waypoint_threshold\":" << waypoint_config.threshold << ",\n"
+        << "  \"waypoints\":[\n";
+    for (int i = 0; i < waypoint_config.count; i++) {
+        if (i > 0) {
+            out << ",\n";
+        }
+        out << "    {\"index\":" << i
+            << ",\"x\":" << waypoint_config.points[i][0]
+            << ",\"y\":" << waypoint_config.points[i][1]
+            << ",\"z\":" << waypoint_config.points[i][2]
+            << "}";
+    }
+    out << "\n  ],\n"
         << "  \"samples\":[\n";
 
     for (int step = 0; step < options.steps; step++) {
         const float dx = qc_mcmpc::target_host.x - state[kStateX];
         const float dy = qc_mcmpc::target_host.y - state[kStateX + 1];
-        const float threshold = _SQUARE_WAYPOINT_THRESHOLD;
+        const float threshold = waypoint_config.threshold;
         if (dx * dx + dy * dy < threshold * threshold &&
-            square_waypoint_index + 1 < _SQUARE_WAYPOINTS) {
+            square_waypoint_index + 1 < waypoint_config.count) {
             set_square_waypoint(square_waypoint_index + 1, mcmpc_log);
         }
 
@@ -279,24 +397,56 @@ int main(int argc, char** argv)
             state[7], state[8], state[9],
             state[10], state[11], state[12],
         };
+        float prediction[_DEVICE_CONST_HORIZON][_N_OF_ODES];
         check_cuda(
             cudaMemcpyFromSymbol(
-                state,
+                prediction,
                 qc_mcmpc::deterministic_sim_trajectory_device,
-                sizeof(state)),
-            "read deterministic state");
+                sizeof(prediction)),
+            "read deterministic prediction");
+        std::copy(prediction[0], prediction[0] + _N_OF_ODES, state);
         copy_next_context_from_deterministic_step(previous_state);
+
+        int collision_flag = 0;
+        float contact_point[3] = {0.0f, 0.0f, 0.0f};
+        float collision_impulse = 0.0f;
+        float pre_contact_normal_velocity = 0.0f;
+#ifdef PREDICTABLE_COLLISION_WITH_WALL
+        check_cuda(cudaMemcpyFromSymbol(
+            &collision_flag, qc_mcmpc::deterministic_sim_collision_device,
+            sizeof(collision_flag)), "read deterministic collision flag");
+        check_cuda(cudaMemcpyFromSymbol(
+            contact_point, qc_mcmpc::deterministic_sim_contact_point_device,
+            sizeof(contact_point)), "read deterministic contact point");
+        check_cuda(cudaMemcpyFromSymbol(
+            &collision_impulse, qc_mcmpc::deterministic_sim_impulse_device,
+            sizeof(collision_impulse)), "read deterministic collision impulse");
+        check_cuda(cudaMemcpyFromSymbol(
+            &pre_contact_normal_velocity,
+            qc_mcmpc::deterministic_sim_pre_contact_normal_velocity_device,
+            sizeof(pre_contact_normal_velocity)),
+            "read deterministic pre-contact normal velocity");
+#endif
+        if (collision_flag && square_waypoint_index + 1 < waypoint_config.count) {
+            set_square_waypoint(square_waypoint_index + 1, mcmpc_log);
+        }
 
         write_json_state(
             out,
             step,
-            mcmpc_log,
+            mcmpc_log + CONST_PARAM_FLOAT::CONTROL_PERIOD,
             state,
             input_x,
             input_y,
             input_z,
             input_yaw,
-            cost);
+            cost,
+            collision_flag != 0,
+            contact_point,
+            collision_impulse,
+            pre_contact_normal_velocity,
+            prediction,
+            best_input);
 
         mcmpc_log += CONST_PARAM_FLOAT::CONTROL_PERIOD;
     }
