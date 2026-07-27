@@ -47,10 +47,10 @@ if not _mpl_config_dir or not os.access(_mpl_config_dir, os.W_OK):
 warnings.filterwarnings("ignore", message="Unable to import Axes3D.*", category=UserWarning, )
 import matplotlib.pyplot as plt
 
-DEFAULT_CSV = "/home/kt182/ws_mcmpc/src/quadcopter_mcmpc_expt/visualize_mcmpc/csv/mcmpc_log_move_square.csv"
+DEFAULT_CSV = "/home/kt182/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_20260728_060711.csv"
 
 SIMULATION = False
-MODE_MODEL_INPUT = "model_input"
+MODE_MODEL_INPUT = "model_prediction"
 
 FUTURE_TARGET_COLUMNS = [
     "target_x",
@@ -976,23 +976,32 @@ def log_vector_from_row(row, names):
     return values
 
 
-def sync_vertical_context_from_logged_model(row, context):
+def sync_context_from_logged_model(row, context):
     synced = copy.deepcopy(context)
-    if "model_vel_int_z" in row.index and np.isfinite(row["model_vel_int_z"]):
-        vel_int = np.asarray(
-            synced.get("vel_int", np.zeros(3, dtype=float)),
-            dtype=float,
-        ).copy()
-        vel_int[2] = float(row["model_vel_int_z"])
-        synced["vel_int"] = vel_int
-    if "model_acc_bias_z" in row.index and np.isfinite(row["model_acc_bias_z"]):
-        acceleration_bias = np.asarray(
-            synced.get("acceleration_bias", np.zeros(3, dtype=float)),
-            dtype=float,
-        ).copy()
-        acceleration_bias[2] = float(row["model_acc_bias_z"])
-        synced["acceleration_bias"] = acceleration_bias
+
+    logged_rate_int = logged_rate_int_from_row(row)
+    if logged_rate_int is not None:
+        synced["rate_int"] = logged_rate_int.copy()
+
+    if "hover_thrust" in row.index and "hover_thrust_valid" in row.index:
+        hover_thrust = float(row["hover_thrust"])
+        hover_thrust_valid = bool(
+            np.isfinite(row["hover_thrust_valid"])
+            and row["hover_thrust_valid"] != 0.0
+        )
+        if hover_thrust_valid and np.isfinite(hover_thrust) and hover_thrust > 1.0e-6:
+            synced["hover_thrust"] = hover_thrust
+            synced["last_hover_thrust_log"] = hover_thrust
+
+    if "takeoff_state" in row.index and np.isfinite(row["takeoff_state"]):
+        synced["takeoff_state"] = int(row["takeoff_state"])
+
     return synced
+
+
+def logged_motor_speed_from_row(row):
+    names = tuple(f"model_motor_speed_{i}" for i in range(4))
+    return log_vector_from_row(row, names)
 
 
 def update_dynamics_bias_observer(context, row, next_row, state, debug, dt):
@@ -1852,7 +1861,7 @@ def plot_xy(
         y[plot_mask],
         color="tab:blue",
         linewidth=2.0,
-        label="xy_actual",
+        label="xy_trajectory",
     )
 
     waypoints = waypoint_xy_from_df(df, plot_mask)
@@ -1871,8 +1880,8 @@ def plot_xy(
     ax.set_ylabel("y [m]")
     ax.grid(True)
     ax.axis("equal")
-    ax.set_xlim(-0.8, 0.8)
-    ax.set_ylim(-0.8, 0.8)
+    ax.set_xlim(-1.0, 1.0)
+    ax.set_ylim(-1.0, 1.0)
     ax.legend()
     if show:
         plt.show()
@@ -2114,11 +2123,13 @@ def plot_state(
             pred_start_idx,
             ({}, None),
         )
-        if state_name in ("z", "vz"):
-            initial_context = sync_vertical_context_from_logged_model(
-                df.loc[pred_start_idx],
-                initial_context,
-            )
+        initial_context = sync_context_from_logged_model(
+            df.loc[pred_start_idx],
+            initial_context,
+        )
+        logged_motor_speed = logged_motor_speed_from_row(df.loc[pred_start_idx])
+        if logged_motor_speed is not None:
+            initial_prev_motor_speed = logged_motor_speed.copy()
         pred_states, _ = rollout(
             df,
             pred_start_idx,
@@ -2150,6 +2161,8 @@ def plot_state(
     ax.set_ylabel(state_axis_label(state_name))
     ax.grid(True)
     ax.legend()
+    if state_name in ("x", "y"):
+        ax.set_ylim(-1.0, 1.0)
     if plot_start is not None or plot_end is not None or np.any(actual_mask):
         left = float(plot_start) if plot_start is not None else np.nanmin(plot_t[actual_mask])
         right = float(plot_end) if plot_end is not None else np.nanmax(plot_t[actual_mask])
@@ -2176,8 +2189,6 @@ def main():
     df = pd.read_csv(args.csv)
     df = preprocess_log(df, DT)
     states = args.state
-    if len(states) > 2:
-        raise ValueError("--state accepts one or two states")
     if "xy" in states and len(states) > 1:
         raise ValueError("--state xy cannot be combined with another state")
     if states[0] == "xy":
@@ -2213,7 +2224,8 @@ def main():
         plot_named_state(states[0], show=True)
         return
 
-    fig, axes = plt.subplots(2, 1, sharex=True)
+    fig, axes = plt.subplots(1, len(states), sharex=True)
+    axes = np.atleast_1d(axes)
     for ax, state_name in zip(axes, states):
         plot_named_state(state_name, ax=ax, show=False)
     fig.tight_layout()

@@ -55,7 +55,7 @@ if not _mpl_config_dir or not os.access(_mpl_config_dir, os.W_OK):
 warnings.filterwarnings("ignore", message="Unable to import Axes3D.*", category=UserWarning, )
 import matplotlib.pyplot as plt
 
-DEFAULT_CSV = "/home/kt182/ws_mcmpc/src/quadcopter_mcmpc_expt/visualize_mcmpc/csv/offboard_control_log_real_sin_x.csv"
+DEFAULT_CSV = "/home/kt182/ws_mcmpc/src/quadcopter_mcmpc_expt/visualize_mcmpc/csv/mcmpc_log_move_square.csv"
 
 SIMULATION = False
 # prediction mode values:
