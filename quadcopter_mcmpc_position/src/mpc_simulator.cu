@@ -5,65 +5,7 @@
 
 namespace qc_mcmpc
 {
-    __device__ static float dot_vec( float v1_x, float v1_y, float v1_z, float v2_x, float v2_y, float v2_z );
-    __device__ static void cross_vec( float v1_x, float v1_y, float v1_z, float v2_x, float v2_y, float v2_z, float& v_ans_x, float& v_ans_y, float& v_ans_z );
-    __device__ static void inverse_3x3( float matrix_src[3][3], float ans[3][3] );
-    __host__ __device__ static float arctan2f(float y, float x);
     __host__ __device__ static void sin_cosf(float x, float* s, float* c);
-
-#ifdef PREDICTABLE_COLLISION_WITH_WALL
-
-    __device__ static void calculate_deviations( float var_and_z_i[], float var_p[], float input_x, float input_y, float input_z, float input_yaw, bool& col_flag, float v_plus[], float w_plus[] );
-#else
-    __device__ static void calculate_deviations( float var_and_z_i[], float var_p[], float input_x, float input_y, float input_z, float input_yaw );
-
-#endif
-    static float dot_vec_cpu(float v1_x, float v1_y, float v1_z, float v2_x, float v2_y, float v2_z){
-		return v1_x * v2_x + v1_y * v2_y + v1_z * v2_z;
-	}
-
-	static void cross_vec_cpu(float v1_x, float v1_y, float v1_z, float v2_x, float v2_y, float v2_z, float& v_ans_x, float& v_ans_y, float& v_ans_z){
-		v_ans_x = v1_y * v2_z - v1_z * v2_y;
-		v_ans_y = v1_z * v2_x - v1_x * v2_z;
-		v_ans_z = v1_x * v2_y - v1_y * v2_x;
-	}
-
-	static void inverse_3x3__cpu(float matrix_src[3][3], float ans[3][3]){
-		float det  = matrix_src[0][0]*matrix_src[1][1]*matrix_src[2][2];
-              det += matrix_src[1][0]*matrix_src[2][1]*matrix_src[0][2];
-              det += matrix_src[2][0]*matrix_src[0][1]*matrix_src[1][2];
-              det -= matrix_src[2][0]*matrix_src[1][1]*matrix_src[0][2];
-              det -= matrix_src[1][0]*matrix_src[0][1]*matrix_src[2][2];
-              det -= matrix_src[0][0]*matrix_src[2][1]*matrix_src[1][2];
-        
-        ans[0][0] =  ( matrix_src[1][1]*matrix_src[2][2] - matrix_src[1][2]*matrix_src[2][1] ) / det;
-        ans[0][1] = -( matrix_src[1][0]*matrix_src[2][2] - matrix_src[1][2]*matrix_src[2][0] ) / det;
-        ans[0][2] =  ( matrix_src[1][0]*matrix_src[2][1] - matrix_src[1][1]*matrix_src[2][0] ) / det;
-        ans[1][0] = -( matrix_src[0][1]*matrix_src[2][2] - matrix_src[0][2]*matrix_src[2][1] ) / det;
-        ans[1][1] =  ( matrix_src[0][0]*matrix_src[2][2] - matrix_src[0][2]*matrix_src[2][0] ) / det;
-        ans[1][2] = -( matrix_src[0][0]*matrix_src[2][1] - matrix_src[0][1]*matrix_src[2][0] ) / det;
-        ans[2][0] =  ( matrix_src[0][1]*matrix_src[1][2] - matrix_src[0][2]*matrix_src[1][1] ) / det;
-        ans[2][1] = -( matrix_src[0][0]*matrix_src[1][2] - matrix_src[0][2]*matrix_src[1][0] ) / det;
-        ans[2][2] =  ( matrix_src[0][0]*matrix_src[1][1] - matrix_src[0][1]*matrix_src[1][0] ) / det;
-	}
-
-    __host__ __device__ static float arctan2f(float y, float x){
-        const float c1 = M_PI / 4.0f;
-        const float c2 = 3.0f * c1;
-
-        float abs_y = fabsf(y) + 1e-6f;
-        float r, angle;
-
-        if (x >= 0.0f) {
-            r = (x - abs_y) / (x + abs_y);
-            angle = c1 - c1 * r;
-        } else {
-            r = (x + abs_y) / (abs_y - x);
-            angle = c2 - c1 * r;
-        }
-
-        return (y < 0.0f) ? -angle : angle;
-    }
     __host__ __device__ static void sin_cosf(float x, float* s, float* c){
             // wrap [-pi, pi]
         if (x > M_PI) x -= 2.0f * M_PI;
@@ -109,12 +51,12 @@ namespace qc_mcmpc
             float desat = px4_quad_x_mix[m][mix_axis];
             if (fabsf(desat) < 0.2f) continue;
             if (motor_raw[m] < 0.0f) {
-                float k = -motor_raw[m] / desat;
+                float k = -motor_raw[m] * __frcp_rn(desat);
                 k_min = fminf(k_min, k);
                 k_max = fmaxf(k_max, k);
             }
             if (motor_raw[m] > actuator_max) {
-                float k = (actuator_max - motor_raw[m]) / desat;
+                float k = (actuator_max - motor_raw[m]) * __frcp_rn(desat);
                 k_min = fminf(k_min, k);
                 k_max = fmaxf(k_max, k);
             }
@@ -131,12 +73,12 @@ namespace qc_mcmpc
             float desat = px4_quad_x_mix[m][mix_axis];
             if (fabsf(desat) < 0.2f) continue;
             if (motor_raw[m] < 0.0f) {
-                float k = -motor_raw[m] / desat;
+                float k = -motor_raw[m] * __frcp_rn(desat);
                 k_min = fminf(k_min, k);
                 k_max = fmaxf(k_max, k);
             }
             if (motor_raw[m] > actuator_max) {
-                float k = (actuator_max - motor_raw[m]) / desat;
+                float k = (actuator_max - motor_raw[m]) * __frcp_rn(desat);
                 k_min = fminf(k_min, k);
                 k_max = fmaxf(k_max, k);
             }
@@ -233,16 +175,17 @@ namespace qc_mcmpc
             return false;
         }
         float normal_world[3] = {wall_nv_x_device, wall_nv_y_device, wall_nv_z_device};
-        const float normal_norm = sqrtf(
+        const float normal_norm_squared =
             normal_world[0] * normal_world[0] +
             normal_world[1] * normal_world[1] +
-            normal_world[2] * normal_world[2]);
-        if (normal_norm < 1.0e-6f) {
+            normal_world[2] * normal_world[2];
+        if (normal_norm_squared < 1.0e-12f) {
             return false;
         }
-        normal_world[0] /= normal_norm;
-        normal_world[1] /= normal_norm;
-        normal_world[2] /= normal_norm;
+        const float normal_inv_norm = rsqrtf(normal_norm_squared);
+        normal_world[0] *= normal_inv_norm;
+        normal_world[1] *= normal_inv_norm;
+        normal_world[2] *= normal_inv_norm;
 
         const float q0 = state[0], q1 = state[1], q2 = state[2], q3 = state[3];
         const float rotation[3][3] = {
@@ -324,16 +267,16 @@ namespace qc_mcmpc
             contact_r_body[0]*normal_body[1] - contact_r_body[1]*normal_body[0],
         };
         const float inertia_inverse_r_cross_n[3] = {
-            r_cross_n[0] / i_xx_device,
-            r_cross_n[1] / i_yy_device,
-            r_cross_n[2] / i_zz_device,
+            r_cross_n[0] * __frcp_rn(i_xx_device),
+            r_cross_n[1] * __frcp_rn(i_yy_device),
+            r_cross_n[2] * __frcp_rn(i_zz_device),
         };
         const float inertia_term_cross_r[3] = {
             inertia_inverse_r_cross_n[1]*contact_r_body[2] - inertia_inverse_r_cross_n[2]*contact_r_body[1],
             inertia_inverse_r_cross_n[2]*contact_r_body[0] - inertia_inverse_r_cross_n[0]*contact_r_body[2],
             inertia_inverse_r_cross_n[0]*contact_r_body[1] - inertia_inverse_r_cross_n[1]*contact_r_body[0],
         };
-        const float effective_mass_inverse = 1.0f / mass_of_machine_device +
+        const float effective_mass_inverse = __frcp_rn(mass_of_machine_device) +
             inertia_term_cross_r[0]*normal_body[0] +
             inertia_term_cross_r[1]*normal_body[1] +
             inertia_term_cross_r[2]*normal_body[2];
@@ -341,11 +284,13 @@ namespace qc_mcmpc
             return true;
         }
         const float impulse =
-            -(1.0f + coeff_of_rest_device) * contact_normal_velocity / effective_mass_inverse;
+            -(1.0f + coeff_of_rest_device) * contact_normal_velocity *
+            __frcp_rn(effective_mass_inverse);
         impulse_out = impulse;
-        state[10] += impulse * normal_world[0] / mass_of_machine_device;
-        state[11] += impulse * normal_world[1] / mass_of_machine_device;
-        state[12] += impulse * normal_world[2] / mass_of_machine_device;
+        const float impulse_over_mass = impulse * __frcp_rn(mass_of_machine_device);
+        state[10] += impulse_over_mass * normal_world[0];
+        state[11] += impulse_over_mass * normal_world[1];
+        state[12] += impulse_over_mass * normal_world[2];
         omega_body[0] += impulse * inertia_inverse_r_cross_n[0];
         omega_body[1] += impulse * inertia_inverse_r_cross_n[1];
         omega_body[2] += impulse * inertia_inverse_r_cross_n[2];
@@ -491,20 +436,30 @@ namespace qc_mcmpc
             initial_segment_x * initial_segment_x +
             initial_segment_y * initial_segment_y +
             initial_segment_z * initial_segment_z;
+        float segment_x = initial_segment_x;
+        float segment_y = initial_segment_y;
+        float segment_z = initial_segment_z;
+        float segment_length = initial_segment_length_sq > 1.0e-12f
+            ? sqrtf(initial_segment_length_sq) : 0.0f;
+        float segment_inv_length = initial_segment_length_sq > 1.0e-12f
+            ? rsqrtf(initial_segment_length_sq) : 0.0f;
         float ref_segment_progress = 0.0f;
         if (initial_segment_length_sq > 1.0e-12f) {
-            const float projection = (
+            ref_segment_progress = fminf(fmaxf((
                 (var_and_z_i_temp[7] - square_waypoints_device[ref_segment_index][0]) * initial_segment_x +
                 (var_and_z_i_temp[8] - square_waypoints_device[ref_segment_index][1]) * initial_segment_y +
                 (var_and_z_i_temp[9] - square_waypoints_device[ref_segment_index][2]) * initial_segment_z
-            ) / initial_segment_length_sq;
-            ref_segment_progress =
-                fminf(fmaxf(projection, 0.0f), 1.0f) * sqrtf(initial_segment_length_sq);
+            ) * segment_inv_length, 0.0f), segment_length);
         }
+#ifdef PREDICTABLE_COLLISION_WITH_WALL
         int predicted_mission_index = square_waypoint_index_device;
         bool predicted_post_collision_phase = false;
         float post_collision_elapsed = 0.0f;
         float post_collision_origin[3] = {0.0f, 0.0f, 0.0f};
+        float post_collision_delta[3] = {0.0f, 0.0f, 0.0f};
+        float post_collision_distance = 0.0f;
+        float post_collision_inv_distance = 0.0f;
+#endif
 
         // ホライズン内で変化しない制御・モデル係数はサンプルごとに一度だけ計算する。
         const bool flying = takeoff_state_device >= takeoff_state_flight_device;
@@ -524,20 +479,29 @@ namespace qc_mcmpc
         if (!isfinite(hover_thrust) || hover_thrust < 1.0e-6f) {
             hover_thrust = 0.60f;
         }
-        const float hover_over_gravity = hover_thrust / a_of_gravity_device;
-        const float gravity_over_hover = a_of_gravity_device / hover_thrust;
+        const float hover_over_gravity = hover_thrust * __frcp_rn(a_of_gravity_device);
+        const float gravity_over_hover = a_of_gravity_device * __frcp_rn(hover_thrust);
         const float thrust_max_squared = mpc_thr_max * mpc_thr_max;
+        const float inv_control_period = __frcp_rn(control_period_device);
+        const float inv_mass = __frcp_rn(mass_of_machine_device);
+        const float inv_i_xx = __frcp_rn(i_xx_device);
+        const float inv_i_yy = __frcp_rn(i_yy_device);
+        const float inv_i_zz = __frcp_rn(i_zz_device);
 
         const float vel_dot_alpha = (mpc_veld_lp > 1.0e-6f)
-            ? control_period_device / (control_period_device + 1.0f / (2.0f * M_PI * mpc_veld_lp))
+            ? control_period_device * __frcp_rn(control_period_device +
+                __frcp_rn(2.0f * M_PI * mpc_veld_lp))
             : 1.0f;
         const float omega_dot_lpf_alpha = (angular_accel_lp > 1.0e-6f)
-            ? control_period_device / (control_period_device + 1.0f / (2.0f * M_PI * angular_accel_lp))
+            ? control_period_device * __frcp_rn(control_period_device +
+                __frcp_rn(2.0f * M_PI * angular_accel_lp))
             : 1.0f;
         const float yaw_alpha = (mc_yaw_tq_cutoff > 1.0e-6f)
-            ? control_period_device / (control_period_device + 1.0f / (2.0f * M_PI * mc_yaw_tq_cutoff))
+            ? control_period_device * __frcp_rn(control_period_device +
+                __frcp_rn(2.0f * M_PI * mc_yaw_tq_cutoff))
             : 1.0f;
-        const float yaw_gain = (mc_yaw_weight > 1.0e-4f) ? (mc_yaw_p / mc_yaw_weight) : mc_yaw_p;
+        const float yaw_gain = (mc_yaw_weight > 1.0e-4f)
+            ? mc_yaw_p * __frcp_rn(mc_yaw_weight) : mc_yaw_p;
         const float rate_i_gain[3] = {
             mc_rollrate_k * mc_rollrate_i,
             mc_pitchrate_k * mc_pitchrate_i,
@@ -545,9 +509,9 @@ namespace qc_mcmpc
         };
         const float rate_int_lim[3] = {mc_rr_int_lim, mc_pr_int_lim, mc_yr_int_lim};
         const float motor_alpha_up = expf(
-            -control_period_device / fmaxf(motor_time_constant_up, 1.0e-9f));
+            -control_period_device * __frcp_rn(fmaxf(motor_time_constant_up, 1.0e-9f)));
         const float motor_alpha_down = expf(
-            -control_period_device / fmaxf(motor_time_constant_down, 1.0e-9f));
+            -control_period_device * __frcp_rn(fmaxf(motor_time_constant_down, 1.0e-9f)));
 
         // 内部で位置/ヨー入力からsetpointを計算し，同定済み離散モデルで状態遷移する
         for ( int i = 0; i < _DEVICE_CONST_HORIZON; i++ )
@@ -561,10 +525,13 @@ namespace qc_mcmpc
             vel_setpoint[1] = mpc_xy_p * (y_ref - var_and_z_i_temp[8]);
             vel_setpoint[2] = mpc_z_p  * (z_ref - var_and_z_i_temp[9]);
 
-            float vel_xy_norm = sqrtf(vel_setpoint[0]*vel_setpoint[0] + vel_setpoint[1]*vel_setpoint[1]);
-            if (vel_xy_norm > mpc_xy_vel_max && vel_xy_norm > 1.0e-8f) {
-                vel_setpoint[0] = vel_setpoint[0] / vel_xy_norm * mpc_xy_vel_max;
-                vel_setpoint[1] = vel_setpoint[1] / vel_xy_norm * mpc_xy_vel_max;
+            const float vel_xy_norm_squared =
+                vel_setpoint[0]*vel_setpoint[0] + vel_setpoint[1]*vel_setpoint[1];
+            if (vel_xy_norm_squared > mpc_xy_vel_max * mpc_xy_vel_max &&
+                vel_xy_norm_squared > 1.0e-16f) {
+                const float vel_scale = mpc_xy_vel_max * rsqrtf(vel_xy_norm_squared);
+                vel_setpoint[0] *= vel_scale;
+                vel_setpoint[1] *= vel_scale;
             }
             vel_setpoint[2] = fminf(fmaxf(vel_setpoint[2], -mpc_z_vel_max_up), mpc_z_vel_max_down);
 
@@ -573,9 +540,9 @@ namespace qc_mcmpc
             vel_error[1] = vel_setpoint[1] - var_and_z_i_temp[11];
             vel_error[2] = vel_setpoint[2] - var_and_z_i_temp[12];
 
-            float vel_dot_x = (var_and_z_i_temp[10] - prev_vel[0]) / control_period_device;
-            float vel_dot_y = (var_and_z_i_temp[11] - prev_vel[1]) / control_period_device;
-            float vel_dot_z = (var_and_z_i_temp[12] - prev_vel[2]) / control_period_device;
+            float vel_dot_x = (var_and_z_i_temp[10] - prev_vel[0]) * inv_control_period;
+            float vel_dot_y = (var_and_z_i_temp[11] - prev_vel[1]) * inv_control_period;
+            float vel_dot_z = (var_and_z_i_temp[12] - prev_vel[2]) * inv_control_period;
 
             float vel_dot_lpf[3];
             vel_dot_lpf[0] = prev_acc[0] + vel_dot_alpha * (vel_dot_x - prev_acc[0]);
@@ -602,14 +569,16 @@ namespace qc_mcmpc
                 rejection[0] = body_z[0];
                 rejection[1] = body_z[1];
                 rejection[2] = 0.0f;
-                float rejection_norm = sqrtf(rejection[0]*rejection[0] + rejection[1]*rejection[1]);
-                if (rejection_norm < 1.0e-8f) {
+                const float rejection_norm_squared =
+                    rejection[0]*rejection[0] + rejection[1]*rejection[1];
+                if (rejection_norm_squared < 1.0e-16f) {
                     rejection[0] = 1.0f;
                     rejection[1] = 0.0f;
-                    rejection_norm = 1.0f;
+                } else {
+                    const float rejection_inv_norm = rsqrtf(rejection_norm_squared);
+                    rejection[0] *= rejection_inv_norm;
+                    rejection[1] *= rejection_inv_norm;
                 }
-                rejection[0] /= rejection_norm;
-                rejection[1] /= rejection_norm;
                 body_z[0] = sin_tilt_limit * rejection[0];
                 body_z[1] = sin_tilt_limit * rejection[1];
                 body_z[2] = cos_tilt_limit;
@@ -625,7 +594,7 @@ namespace qc_mcmpc
             float cos_ned_body = body_z[2];
             if (fabsf(cos_ned_body) < 1.0e-6f) cos_ned_body = 1.0e-6f;
 
-            float collective_thrust = fminf(thrust_ned_z / cos_ned_body, -thrust_min);
+            float collective_thrust = fminf(thrust_ned_z * __frcp_rn(cos_ned_body), -thrust_min);
             thrust_setpoint[0] = body_z[0] * collective_thrust;
             thrust_setpoint[1] = body_z[1] * collective_thrust;
             thrust_setpoint[2] = body_z[2] * collective_thrust;
@@ -636,7 +605,9 @@ namespace qc_mcmpc
             }
 
             // mcmpc_viewer と同じ thrust saturation
-            float thrust_sp_xy_norm = sqrtf(thrust_setpoint[0]*thrust_setpoint[0] + thrust_setpoint[1]*thrust_setpoint[1]);
+            const float thrust_sp_xy_norm_squared =
+                thrust_setpoint[0]*thrust_setpoint[0] + thrust_setpoint[1]*thrust_setpoint[1];
+            float thrust_sp_xy_norm = sqrtf(thrust_sp_xy_norm_squared);
             float allocated_horizontal_thrust = fminf(thrust_sp_xy_norm, mpc_thr_xy_margin);
             float thrust_z_max_squared = thrust_max_squared - allocated_horizontal_thrust * allocated_horizontal_thrust;
             thrust_setpoint[2] = fmaxf(thrust_setpoint[2], -sqrtf(fmaxf(0.0f, thrust_z_max_squared)));
@@ -644,8 +615,9 @@ namespace qc_mcmpc
             float thrust_max_xy_squared = thrust_max_squared - thrust_setpoint[2] * thrust_setpoint[2];
             float thrust_max_xy = sqrtf(fmaxf(0.0f, thrust_max_xy_squared));
             if (thrust_sp_xy_norm > thrust_max_xy && thrust_sp_xy_norm > 1.0e-8f) {
-                thrust_setpoint[0] = thrust_setpoint[0] / thrust_sp_xy_norm * thrust_max_xy;
-                thrust_setpoint[1] = thrust_setpoint[1] / thrust_sp_xy_norm * thrust_max_xy;
+                const float thrust_xy_scale = thrust_max_xy * rsqrtf(thrust_sp_xy_norm_squared);
+                thrust_setpoint[0] *= thrust_xy_scale;
+                thrust_setpoint[1] *= thrust_xy_scale;
             }
 
             float acc_sp_xy_produced[2];
@@ -671,16 +643,18 @@ namespace qc_mcmpc
             att_body_z[0] = -thrust_setpoint[0];
             att_body_z[1] = -thrust_setpoint[1];
             att_body_z[2] = -thrust_setpoint[2];
-            float att_bz_norm = sqrtf(att_body_z[0]*att_body_z[0]+att_body_z[1]*att_body_z[1]+att_body_z[2]*att_body_z[2]);
-            if (att_bz_norm < 1.0e-8f) {
+            const float att_bz_norm_squared =
+                att_body_z[0]*att_body_z[0]+att_body_z[1]*att_body_z[1]+att_body_z[2]*att_body_z[2];
+            if (att_bz_norm_squared < 1.0e-16f) {
                 att_body_z[0] = 0.0f;
                 att_body_z[1] = 0.0f;
                 att_body_z[2] = 1.0f;
-                att_bz_norm = 1.0f;
+            } else {
+                const float att_bz_inv_norm = rsqrtf(att_bz_norm_squared);
+                att_body_z[0] *= att_bz_inv_norm;
+                att_body_z[1] *= att_bz_inv_norm;
+                att_body_z[2] *= att_bz_inv_norm;
             }
-            att_body_z[0] /= att_bz_norm;
-            att_body_z[1] /= att_bz_norm;
-            att_body_z[2] /= att_bz_norm;
 
             float sy, cy;
             sin_cosf(yaw_ref, &sy, &cy);
@@ -718,27 +692,31 @@ namespace qc_mcmpc
             float tr = r00 + r11 + r22;
             if (tr > 0.0f) {
                 float s = sqrtf(tr + 1.0f) * 2.0f;
+                const float inv_s = __frcp_rn(s);
                 att_setpoint[0] = 0.25f * s;
-                att_setpoint[1] = (r21 - r12) / s;
-                att_setpoint[2] = (r02 - r20) / s;
-                att_setpoint[3] = (r10 - r01) / s;
+                att_setpoint[1] = (r21 - r12) * inv_s;
+                att_setpoint[2] = (r02 - r20) * inv_s;
+                att_setpoint[3] = (r10 - r01) * inv_s;
             } else if (r00 > r11 && r00 > r22) {
                 float s = sqrtf(1.0f + r00 - r11 - r22) * 2.0f;
-                att_setpoint[0] = (r21 - r12) / s;
+                const float inv_s = __frcp_rn(s);
+                att_setpoint[0] = (r21 - r12) * inv_s;
                 att_setpoint[1] = 0.25f * s;
-                att_setpoint[2] = (r01 + r10) / s;
-                att_setpoint[3] = (r02 + r20) / s;
+                att_setpoint[2] = (r01 + r10) * inv_s;
+                att_setpoint[3] = (r02 + r20) * inv_s;
             } else if (r11 > r22) {
                 float s = sqrtf(1.0f + r11 - r00 - r22) * 2.0f;
-                att_setpoint[0] = (r02 - r20) / s;
-                att_setpoint[1] = (r01 + r10) / s;
+                const float inv_s = __frcp_rn(s);
+                att_setpoint[0] = (r02 - r20) * inv_s;
+                att_setpoint[1] = (r01 + r10) * inv_s;
                 att_setpoint[2] = 0.25f * s;
-                att_setpoint[3] = (r12 + r21) / s;
+                att_setpoint[3] = (r12 + r21) * inv_s;
             } else {
                 float s = sqrtf(1.0f + r22 - r00 - r11) * 2.0f;
-                att_setpoint[0] = (r10 - r01) / s;
-                att_setpoint[1] = (r02 + r20) / s;
-                att_setpoint[2] = (r12 + r21) / s;
+                const float inv_s = __frcp_rn(s);
+                att_setpoint[0] = (r10 - r01) * inv_s;
+                att_setpoint[1] = (r02 + r20) * inv_s;
+                att_setpoint[2] = (r12 + r21) * inv_s;
                 att_setpoint[3] = 0.25f * s;
             }
             float qsp_norm_inv = rsqrtf(att_setpoint[0]*att_setpoint[0] + att_setpoint[1]*att_setpoint[1] + att_setpoint[2]*att_setpoint[2] + att_setpoint[3]*att_setpoint[3]);
@@ -768,7 +746,9 @@ namespace qc_mcmpc
                 e_z[2]*e_z_d[0] - e_z[0]*e_z_d[2],
                 e_z[0]*e_z_d[1] - e_z[1]*e_z_d[0]
             };
-            float tilt_axis_norm = sqrtf(tilt_axis[0]*tilt_axis[0] + tilt_axis[1]*tilt_axis[1] + tilt_axis[2]*tilt_axis[2]);
+            const float tilt_axis_norm_squared =
+                tilt_axis[0]*tilt_axis[0] + tilt_axis[1]*tilt_axis[1] + tilt_axis[2]*tilt_axis[2];
+            float tilt_axis_norm = sqrtf(tilt_axis_norm_squared);
             float tilt_dot = fminf(fmaxf(e_z[0]*e_z_d[0] + e_z[1]*e_z_d[1] + e_z[2]*e_z_d[2], -1.0f), 1.0f);
             float qd_red[4];
             if (tilt_axis_norm < 1.0e-8f) {
@@ -778,9 +758,10 @@ namespace qc_mcmpc
                     qd_red[0] = att_setpoint[0]; qd_red[1] = att_setpoint[1]; qd_red[2] = att_setpoint[2]; qd_red[3] = att_setpoint[3];
                 }
             } else {
-                tilt_axis[0] /= tilt_axis_norm;
-                tilt_axis[1] /= tilt_axis_norm;
-                tilt_axis[2] /= tilt_axis_norm;
+                const float tilt_axis_inv_norm = rsqrtf(tilt_axis_norm_squared);
+                tilt_axis[0] *= tilt_axis_inv_norm;
+                tilt_axis[1] *= tilt_axis_inv_norm;
+                tilt_axis[2] *= tilt_axis_inv_norm;
                 float tilt_angle_red = atan2f(tilt_axis_norm, tilt_dot);
                 qd_red[0] = cosf(0.5f * tilt_angle_red);
                 qd_red[1] = tilt_axis[0] * sinf(0.5f * tilt_angle_red);
@@ -852,9 +833,9 @@ namespace qc_mcmpc
                 var_and_z_i_temp[6],
             };
             float raw_omega_dot[3] = {
-                (w_prev[0] - prev_omega[0]) / control_period_device,
-                (w_prev[1] - prev_omega[1]) / control_period_device,
-                (w_prev[2] - prev_omega[2]) / control_period_device,
+                (w_prev[0] - prev_omega[0]) * inv_control_period,
+                (w_prev[1] - prev_omega[1]) * inv_control_period,
+                (w_prev[2] - prev_omega[2]) * inv_control_period,
             };
 
             float omega_dot[3] = {
@@ -892,7 +873,7 @@ namespace qc_mcmpc
                     float err_for_int = rate_error[axis];
                     if (saturation_positive[axis]) err_for_int = fminf(err_for_int, 0.0f);
                     if (saturation_negative[axis]) err_for_int = fmaxf(err_for_int, 0.0f);
-                    float i_factor = err_for_int / 6.9813170f;
+                    float i_factor = err_for_int * 0.143239450f;
                     i_factor = fmaxf(0.0f, 1.0f - i_factor * i_factor);
                     rate_int[axis] += i_factor * rate_i_gain[axis] * err_for_int * control_period_device;
                     rate_int[axis] = fminf(fmaxf(rate_int[axis], -rate_int_lim[axis]), rate_int_lim[axis]);
@@ -946,9 +927,9 @@ namespace qc_mcmpc
             float r12_force = 2.0f * (q2*q3 - q0*q1);
             float r22_force = 1.0f - 2.0f * (q1*q1 + q2*q2);
             float acc_for_dynamics[3] = {
-                r02_force * force_body_z / mass_of_machine_device,
-                r12_force * force_body_z / mass_of_machine_device,
-                r22_force * force_body_z / mass_of_machine_device + a_of_gravity_device,
+                r02_force * force_body_z * inv_mass,
+                r12_force * force_body_z * inv_mass,
+                r22_force * force_body_z * inv_mass + a_of_gravity_device,
             };
 
             acc_for_dynamics[0] += acceleration_bias_device[0];
@@ -966,9 +947,9 @@ namespace qc_mcmpc
                 w_prev[0]*inertia_omega[1] - w_prev[1]*inertia_omega[0],
             };
             float omega_dot_phys[3] = {
-                (torque_body[0] - cross_w_iw[0]) / i_xx_device,
-                (torque_body[1] - cross_w_iw[1]) / i_yy_device,
-                (torque_body[2] - cross_w_iw[2]) / i_zz_device,
+                (torque_body[0] - cross_w_iw[0]) * inv_i_xx,
+                (torque_body[1] - cross_w_iw[1]) * inv_i_yy,
+                (torque_body[2] - cross_w_iw[2]) * inv_i_zz,
             };
             float omega_dot_for_dynamics[3] = {omega_dot_phys[0], omega_dot_phys[1], omega_dot_phys[2]};
 
@@ -1032,6 +1013,21 @@ namespace qc_mcmpc
                 post_collision_origin[0] = var_and_z_i_temp[7];
                 post_collision_origin[1] = var_and_z_i_temp[8];
                 post_collision_origin[2] = var_and_z_i_temp[9];
+                post_collision_delta[0] =
+                    square_waypoints_device[predicted_mission_index][0] - post_collision_origin[0];
+                post_collision_delta[1] =
+                    square_waypoints_device[predicted_mission_index][1] - post_collision_origin[1];
+                post_collision_delta[2] =
+                    square_waypoints_device[predicted_mission_index][2] - post_collision_origin[2];
+                const float post_collision_distance_squared =
+                    post_collision_delta[0] * post_collision_delta[0] +
+                    post_collision_delta[1] * post_collision_delta[1] +
+                    post_collision_delta[2] * post_collision_delta[2];
+                if (post_collision_distance_squared > 1.0e-12f) {
+                    post_collision_inv_distance = rsqrtf(post_collision_distance_squared);
+                    post_collision_distance =
+                        post_collision_distance_squared * post_collision_inv_distance;
+                }
             }
             if (sample_id < 0) {
                 deterministic_sim_collision_device[i] = collision_event ? 1 : 0;
@@ -1045,19 +1041,7 @@ namespace qc_mcmpc
             }
 #endif
             ref_segment_progress += _WAYPOINT_CRUISE_SPEED * control_period_device;
-            float segment_x = 0.0f;
-            float segment_y = 0.0f;
-            float segment_z = 0.0f;
-            float segment_length = 0.0f;
             while (ref_segment_index < square_waypoint_count_device - 1) {
-                segment_x = square_waypoints_device[ref_segment_index + 1][0] -
-                    square_waypoints_device[ref_segment_index][0];
-                segment_y = square_waypoints_device[ref_segment_index + 1][1] -
-                    square_waypoints_device[ref_segment_index][1];
-                segment_z = square_waypoints_device[ref_segment_index + 1][2] -
-                    square_waypoints_device[ref_segment_index][2];
-                segment_length = sqrtf(
-                    segment_x * segment_x + segment_y * segment_y + segment_z * segment_z);
                 if (segment_length > 1.0e-6f && ref_segment_progress <= segment_length) {
                     break;
                 }
@@ -1067,6 +1051,17 @@ namespace qc_mcmpc
                     break;
                 }
                 ref_segment_index++;
+                segment_x = square_waypoints_device[ref_segment_index + 1][0] -
+                    square_waypoints_device[ref_segment_index][0];
+                segment_y = square_waypoints_device[ref_segment_index + 1][1] -
+                    square_waypoints_device[ref_segment_index][1];
+                segment_z = square_waypoints_device[ref_segment_index + 1][2] -
+                    square_waypoints_device[ref_segment_index][2];
+                const float segment_length_squared =
+                    segment_x * segment_x + segment_y * segment_y + segment_z * segment_z;
+                segment_inv_length = segment_length_squared > 1.0e-12f
+                    ? rsqrtf(segment_length_squared) : 0.0f;
+                segment_length = segment_length_squared * segment_inv_length;
             }
 
             float cost_target_x = square_waypoints_device[ref_segment_index][0];
@@ -1074,14 +1069,14 @@ namespace qc_mcmpc
             float cost_target_z = square_waypoints_device[ref_segment_index][2];
             float waypoint_velocity_ref[3] = {0.0f, 0.0f, 0.0f};
             if (segment_length > 1.0e-6f) {
-                const float path_fraction = fminf(ref_segment_progress / segment_length, 1.0f);
+                const float path_fraction = fminf(ref_segment_progress * segment_inv_length, 1.0f);
                 cost_target_x += path_fraction * segment_x;
                 cost_target_y += path_fraction * segment_y;
                 cost_target_z += path_fraction * segment_z;
                 const bool at_path_end =
                     ref_segment_index == square_waypoint_count_device - 2 && path_fraction >= 1.0f;
                 if (!at_path_end) {
-                    const float velocity_scale = _WAYPOINT_CRUISE_SPEED / segment_length;
+                    const float velocity_scale = _WAYPOINT_CRUISE_SPEED * segment_inv_length;
                     waypoint_velocity_ref[0] = segment_x * velocity_scale;
                     waypoint_velocity_ref[1] = segment_y * velocity_scale;
                     waypoint_velocity_ref[2] = segment_z * velocity_scale;
@@ -1093,27 +1088,19 @@ namespace qc_mcmpc
             if (predicted_post_collision_phase &&
                 predicted_mission_index < square_waypoint_count_device) {
                 post_collision_elapsed += control_period_device;
-                const float exit_dx = square_waypoints_device[predicted_mission_index][0] -
-                    post_collision_origin[0];
-                const float exit_dy = square_waypoints_device[predicted_mission_index][1] -
-                    post_collision_origin[1];
-                const float exit_dz = square_waypoints_device[predicted_mission_index][2] -
-                    post_collision_origin[2];
-                const float exit_distance = sqrtf(
-                    exit_dx*exit_dx + exit_dy*exit_dy + exit_dz*exit_dz);
-                if (exit_distance > 1.0e-6f) {
+                if (post_collision_distance > 1.0e-6f) {
                     const float exit_progress = fminf(
                         _WAYPOINT_CRUISE_SPEED * post_collision_elapsed,
-                        exit_distance);
-                    const float exit_fraction = exit_progress / exit_distance;
-                    cost_target_x = post_collision_origin[0] + exit_fraction * exit_dx;
-                    cost_target_y = post_collision_origin[1] + exit_fraction * exit_dy;
-                    cost_target_z = post_collision_origin[2] + exit_fraction * exit_dz;
-                    const float exit_speed = exit_progress < exit_distance
+                        post_collision_distance);
+                    const float exit_fraction = exit_progress * post_collision_inv_distance;
+                    cost_target_x = post_collision_origin[0] + exit_fraction * post_collision_delta[0];
+                    cost_target_y = post_collision_origin[1] + exit_fraction * post_collision_delta[1];
+                    cost_target_z = post_collision_origin[2] + exit_fraction * post_collision_delta[2];
+                    const float exit_speed = exit_progress < post_collision_distance
                         ? _WAYPOINT_CRUISE_SPEED : 0.0f;
-                    waypoint_velocity_ref[0] = exit_speed * exit_dx / exit_distance;
-                    waypoint_velocity_ref[1] = exit_speed * exit_dy / exit_distance;
-                    waypoint_velocity_ref[2] = exit_speed * exit_dz / exit_distance;
+                    waypoint_velocity_ref[0] = exit_speed * post_collision_delta[0] * post_collision_inv_distance;
+                    waypoint_velocity_ref[1] = exit_speed * post_collision_delta[1] * post_collision_inv_distance;
+                    waypoint_velocity_ref[2] = exit_speed * post_collision_delta[2] * post_collision_inv_distance;
                 }
             }
 
@@ -1136,21 +1123,23 @@ namespace qc_mcmpc
                         contact_velocity_error * contact_velocity_error;
             }
             if (predicted_post_collision_phase) {
-                const float velocity_norm = sqrtf(
+                const float velocity_norm_squared =
                     var_and_z_i_temp[10]*var_and_z_i_temp[10] +
                     var_and_z_i_temp[11]*var_and_z_i_temp[11] +
-                    var_and_z_i_temp[12]*var_and_z_i_temp[12]);
-                const float desired_norm = sqrtf(
+                    var_and_z_i_temp[12]*var_and_z_i_temp[12];
+                const float desired_norm_squared =
                     waypoint_velocity_ref[0]*waypoint_velocity_ref[0] +
                     waypoint_velocity_ref[1]*waypoint_velocity_ref[1] +
-                    waypoint_velocity_ref[2]*waypoint_velocity_ref[2]);
-                if (velocity_norm > 1.0e-5f && desired_norm > 1.0e-5f) {
+                    waypoint_velocity_ref[2]*waypoint_velocity_ref[2];
+                if (velocity_norm_squared > 1.0e-10f && desired_norm_squared > 1.0e-10f) {
+                    const float velocity_inv_norm = rsqrtf(velocity_norm_squared);
+                    const float desired_inv_norm = rsqrtf(desired_norm_squared);
                     const float direction_error_x =
-                        var_and_z_i_temp[10]/velocity_norm - waypoint_velocity_ref[0]/desired_norm;
+                        var_and_z_i_temp[10]*velocity_inv_norm - waypoint_velocity_ref[0]*desired_inv_norm;
                     const float direction_error_y =
-                        var_and_z_i_temp[11]/velocity_norm - waypoint_velocity_ref[1]/desired_norm;
+                        var_and_z_i_temp[11]*velocity_inv_norm - waypoint_velocity_ref[1]*desired_inv_norm;
                     const float direction_error_z =
-                        var_and_z_i_temp[12]/velocity_norm - waypoint_velocity_ref[2]/desired_norm;
+                        var_and_z_i_temp[12]*velocity_inv_norm - waypoint_velocity_ref[2]*desired_inv_norm;
                     collision_mission_cost += _COST_EXIT_DIRECTION * (
                         direction_error_x*direction_error_x +
                         direction_error_y*direction_error_y +

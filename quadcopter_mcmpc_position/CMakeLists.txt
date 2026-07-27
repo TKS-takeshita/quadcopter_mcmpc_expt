@@ -36,6 +36,17 @@ add_library(mcmpc_core SHARED
   src/mcmpc_controller.cu
   src/const_params.cu
 )
+target_compile_definitions(mcmpc_core PRIVATE MCMPC_DISABLE_WALL_MODEL)
+target_compile_options(mcmpc_core PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:--maxrregcount=128>
+)
+
+# Wall-aware controller is kept as a separate binary so the normal real-flight
+# kernel does not reserve registers for collision geometry that it never uses.
+add_library(mcmpc_wall_core SHARED
+  src/mcmpc_controller.cu
+  src/const_params.cu
+)
 
 # The simulator executables read CUDA device symbols directly. Those symbols
 # cannot be addressed reliably across the mcmpc_core shared-library boundary,
@@ -45,7 +56,23 @@ add_library(mcmpc_sim_core STATIC
   src/const_params.cu
 )
 
+add_library(mcmpc_no_wall_sim_core STATIC
+  src/mcmpc_controller.cu
+  src/const_params.cu
+)
+target_compile_definitions(mcmpc_no_wall_sim_core PRIVATE MCMPC_DISABLE_WALL_MODEL)
+target_compile_options(mcmpc_no_wall_sim_core PRIVATE
+  $<$<COMPILE_LANGUAGE:CUDA>:--maxrregcount=128>
+)
+
 set_target_properties(mcmpc_core PROPERTIES
+  OUTPUT_NAME quadcopter_mcmpc_core
+  CUDA_SEPARABLE_COMPILATION ON
+  POSITION_INDEPENDENT_CODE ON
+)
+
+set_target_properties(mcmpc_wall_core PROPERTIES
+  OUTPUT_NAME quadcopter_mcmpc_wall_core
   CUDA_SEPARABLE_COMPILATION ON
   POSITION_INDEPENDENT_CODE ON
 )
@@ -55,7 +82,17 @@ set_target_properties(mcmpc_sim_core PROPERTIES
   POSITION_INDEPENDENT_CODE ON
 )
 
+set_target_properties(mcmpc_no_wall_sim_core PROPERTIES
+  CUDA_SEPARABLE_COMPILATION ON
+  POSITION_INDEPENDENT_CODE ON
+)
+
 target_include_directories(mcmpc_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+target_include_directories(mcmpc_wall_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
@@ -65,7 +102,17 @@ target_include_directories(mcmpc_sim_core PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 
+target_include_directories(mcmpc_no_wall_sim_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
 target_link_libraries(mcmpc_core
+  ${CUDA_LIBRARIES}
+  curand
+)
+
+target_link_libraries(mcmpc_wall_core
   ${CUDA_LIBRARIES}
   curand
 )
@@ -75,7 +122,19 @@ target_link_libraries(mcmpc_sim_core
   curand
 )
 
+target_link_libraries(mcmpc_no_wall_sim_core
+  ${CUDA_LIBRARIES}
+  curand
+)
+
 ament_target_dependencies(mcmpc_core
+  rclcpp
+  px4_msgs
+  sensor_msgs
+  std_msgs
+)
+
+ament_target_dependencies(mcmpc_wall_core
   rclcpp
   px4_msgs
   sensor_msgs
@@ -89,9 +148,27 @@ ament_target_dependencies(mcmpc_sim_core
   std_msgs
 )
 
+ament_target_dependencies(mcmpc_no_wall_sim_core
+  rclcpp
+  px4_msgs
+  sensor_msgs
+  std_msgs
+)
+
 add_executable(quad_mcmpc_node
   src/quad_mcmpc_position.cu
 )
+target_compile_definitions(quad_mcmpc_node PRIVATE MCMPC_DISABLE_WALL_MODEL)
+
+add_executable(quad_mcmpc_wall_node
+  src/quad_mcmpc_position.cu
+)
+
+add_executable(mcmpc_standalone_no_wall_simulator
+  src/mcmpc_standalone_simulator.cu
+)
+target_compile_definitions(
+  mcmpc_standalone_no_wall_simulator PRIVATE MCMPC_DISABLE_WALL_MODEL)
 
 add_executable(mcmpc_standalone_simulator
   src/mcmpc_standalone_simulator.cu
@@ -109,6 +186,14 @@ set_target_properties(quad_mcmpc_node PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
 )
 
+set_target_properties(quad_mcmpc_wall_node PROPERTIES
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
+set_target_properties(mcmpc_standalone_no_wall_simulator PROPERTIES
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
 set_target_properties(mcmpc_standalone_simulator PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
 )
@@ -118,6 +203,14 @@ set_target_properties(mcmpc_truth_simulator PROPERTIES
 )
 
 target_include_directories(quad_mcmpc_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_include_directories(quad_mcmpc_wall_node PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+target_include_directories(mcmpc_standalone_no_wall_simulator PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
@@ -131,6 +224,14 @@ target_include_directories(mcmpc_truth_simulator PRIVATE
 
 target_link_libraries(quad_mcmpc_node
   mcmpc_core
+)
+
+target_link_libraries(quad_mcmpc_wall_node
+  mcmpc_wall_core
+)
+
+target_link_libraries(mcmpc_standalone_no_wall_simulator
+  mcmpc_no_wall_sim_core
 )
 
 target_link_libraries(mcmpc_standalone_simulator
@@ -153,6 +254,13 @@ ament_target_dependencies(quad_mcmpc_node
   std_msgs
 )
 
+ament_target_dependencies(quad_mcmpc_wall_node
+  rclcpp
+  px4_msgs
+  sensor_msgs
+  std_msgs
+)
+
 ament_target_dependencies(mcmpc_truth_simulator
   rclcpp
   px4_msgs
@@ -162,7 +270,9 @@ ament_target_dependencies(mcmpc_truth_simulator
 
 install(TARGETS
   quad_mcmpc_node
+  quad_mcmpc_wall_node
   mcmpc_standalone_simulator
+  mcmpc_standalone_no_wall_simulator
   mcmpc_truth_simulator
   mcmpc_sim_joy_starter
   DESTINATION lib/${PROJECT_NAME}
@@ -174,6 +284,7 @@ install(DIRECTORY launch config
 
 install(TARGETS
   mcmpc_core
+  mcmpc_wall_core
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}

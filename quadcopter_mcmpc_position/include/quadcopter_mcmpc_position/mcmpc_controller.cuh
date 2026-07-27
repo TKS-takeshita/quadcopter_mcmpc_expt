@@ -20,7 +20,7 @@ namespace qc_mcmpc
         mcmpc_controller();
         ~mcmpc_controller();
 
-        float calc_weighted_average_and_min_cost();
+        float calc_weighted_average_and_min_cost(bool copy_to_host);
 
         curandState *curand_state_array;
 

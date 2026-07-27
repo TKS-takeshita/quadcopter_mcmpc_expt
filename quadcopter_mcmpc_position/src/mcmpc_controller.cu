@@ -172,8 +172,6 @@ namespace qc_mcmpc
         }
     }
 
-    void update_target_state_device();
-
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
 	static float dot_vec_cpu(float v1_x, float v1_y, float v1_z, float v2_x, float v2_y, float v2_z);
 	static void cross_vec_cpu(float v1_x, float v1_y, float v1_z, float v2_x, float v2_y, float v2_z, float& v_ans_x, float& v_ans_y, float& v_ans_z);
@@ -483,10 +481,11 @@ namespace qc_mcmpc
             }
             __syncthreads();
         }
-        const float lambda = reduction[0] / static_cast<float>(TOPK_SIZE);
+        const float lambda = reduction[0] * 0.01f;
+        const float inv_lambda = __frcp_rn(lambda);
 
         const float weight = (tid < TOPK_SIZE)
-            ? expf(-cost / lambda)
+            ? expf(-cost * inv_lambda)
             : 0.0f;
         if (tid < TOPK_SIZE) {
             weights[tid] = weight;
@@ -500,6 +499,7 @@ namespace qc_mcmpc
             __syncthreads();
         }
         const float weight_sum = reduction[0];
+        const float inv_weight_sum = __frcp_rn(weight_sum);
 
         constexpr int input_count = _DEVICE_CONST_HORIZON * 4;
         for (int element = tid; element < input_count; element += blockDim.x) {
@@ -510,28 +510,59 @@ namespace qc_mcmpc
                 weighted_sum += samples[top_indices[elite]].decoupled_position[horizon_index][input_index]
                     * weights[elite];
             }
-            best_input->decoupled_position[horizon_index][input_index] = weighted_sum / weight_sum;
+            best_input->decoupled_position[horizon_index][input_index] =
+                weighted_sum * inv_weight_sum;
         }
         if (tid == 0) {
             best_input->cost = 0.0f;
         }
     }
 
-    void update_target_state_device()
+    cudaError_t update_target_state_device()
     {
-        cudaError_t err = cudaMemcpyToSymbol(
+        return cudaMemcpyToSymbol(
             target_state_device,
             &target_host,
             sizeof(target_state_t)
         );
-
-        if (err != cudaSuccess) {
-            std::cerr << "cudaMemcpyToSymbol target_state_device failed: "
-                    << cudaGetErrorString(err) << std::endl;
-        }
     }
 
-    float mcmpc_controller::calc_weighted_average_and_min_cost()
+    cudaError_t upload_waypoint_config_device(
+        const float waypoints[_SQUARE_WAYPOINTS][3],
+        int count,
+        float threshold)
+    {
+        cudaError_t error = cudaMemcpyToSymbol(
+            square_waypoints_device,
+            waypoints,
+            sizeof(float) * _SQUARE_WAYPOINTS * 3);
+        if (error != cudaSuccess) return error;
+        error = cudaMemcpyToSymbol(square_waypoint_count_device, &count, sizeof(count));
+        if (error != cudaSuccess) return error;
+        return cudaMemcpyToSymbol(
+            square_waypoint_threshold_device, &threshold, sizeof(threshold));
+    }
+
+    cudaError_t update_waypoint_progress_device(
+        int index,
+        float change_time,
+        float log_time)
+    {
+        cudaError_t error = cudaMemcpyToSymbol(
+            square_waypoint_index_device, &index, sizeof(index));
+        if (error != cudaSuccess) return error;
+        error = cudaMemcpyToSymbol(
+            square_waypoint_change_time_device, &change_time, sizeof(change_time));
+        if (error != cudaSuccess) return error;
+        return cudaMemcpyToSymbol(mcmpc_log_device, &log_time, sizeof(log_time));
+    }
+
+    cudaError_t update_mcmpc_log_device(float log_time)
+    {
+        return cudaMemcpyToSymbol(mcmpc_log_device, &log_time, sizeof(log_time));
+    }
+
+    float mcmpc_controller::calc_weighted_average_and_min_cost(bool copy_to_host)
 	{
         static_assert(TOPK_SIZE == 100, "TOPK_SIZE must match N_OF_THE_USING_BEST");
         select_block_topk<<<TOPK_NUM_BLOCKS, TOPK_BLOCK_SIZE>>>(
@@ -550,12 +581,13 @@ namespace qc_mcmpc
             thrust::raw_pointer_cast(topk_index_device_vec.data()),
             thrust::raw_pointer_cast(best_input_device_vec.data()));
 
-        // CPUへ戻すのは平均後の1入力列のみ。elite 100入力列はGPU内で完結する。
-        cudaMemcpy(
-            &best_input_array,
-            thrust::raw_pointer_cast(best_input_device_vec.data()),
-            sizeof(input_array),
-            cudaMemcpyDeviceToHost);
+        if (copy_to_host) {
+            cudaMemcpy(
+                &best_input_array,
+                thrust::raw_pointer_cast(best_input_device_vec.data()),
+                sizeof(input_array),
+                cudaMemcpyDeviceToHost);
+        }
         return best_input_array.cost;
 	}
 
@@ -588,11 +620,20 @@ namespace qc_mcmpc
             }
             cudaMemcpyToSymbol(sigma_k_device, sigma_k_iter, 4 * sizeof(float));
             
-            cudaMemcpyToSymbol( average_input_device, &best_input_array, sizeof( input_array ) );
+            if (k == 0) {
+                cudaMemcpyToSymbol(
+                    average_input_device, &best_input_array, sizeof(input_array));
+            } else {
+                cudaMemcpyToSymbol(
+                    average_input_device,
+                    thrust::raw_pointer_cast(best_input_device_vec.data()),
+                    sizeof(input_array), 0, cudaMemcpyDeviceToDevice);
+            }
             
             generate_input_samples_and_calc_costs<<< _DEVICE_CONST_N_OF_BLOCK, _DEVICE_CONST_THREAD_PER_BLOCK >>>( curand_state_array, thrust::raw_pointer_cast( input_array_device_vec.data() ), thrust::raw_pointer_cast( cost_device_vec_for_sorting.data() ) );
 
-            min_cost = calc_weighted_average_and_min_cost();
+            min_cost = calc_weighted_average_and_min_cost(
+                k == CONST_PARAM::ITERATION_TIMES - 1);
         }
 
 		// PIDカスケード用修正　入力：スラスト＋姿勢

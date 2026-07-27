@@ -299,10 +299,16 @@ void set_square_waypoint(int index)
     target_host.y = runtime_waypoint_config.points[square_waypoint_index][1];
     target_host.z = runtime_waypoint_config.points[square_waypoint_index][2];
     set_target_yaw(0.0f);
-    update_target_state_device();
-    cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_index_device, &square_waypoint_index, sizeof(int));
-    cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_change_time_device, &square_waypoint_change_time, sizeof(float));
-    cudaMemcpyToSymbol(qc_mcmpc::mcmpc_log_device, &mcmpc_log, sizeof(float));
+    cudaError_t target_error = update_target_state_device();
+    cudaError_t progress_error = update_waypoint_progress_device(
+        square_waypoint_index, square_waypoint_change_time, mcmpc_log);
+    if (target_error != cudaSuccess || progress_error != cudaSuccess) {
+        RCLCPP_ERROR(
+            rclcpp::get_logger("mcmpc"),
+            "failed to update GPU waypoint state: target=%s progress=%s",
+            cudaGetErrorString(target_error),
+            cudaGetErrorString(progress_error));
+    }
     RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
         "square waypoint %d/%d: x=%f y=%f z=%f",
         square_waypoint_index + 1,
@@ -449,7 +455,11 @@ void joy_callback(const sensor_msgs::msg::Joy::SharedPtr msg)
     pre_power = power_button;
 
     if (target_changed) {
-        update_target_state_device();
+        const cudaError_t error = update_target_state_device();
+        if (error != cudaSuccess) {
+            RCLCPP_ERROR(rclcpp::get_logger("mcmpc"),
+                "failed to update GPU target state: %s", cudaGetErrorString(error));
+        }
         RCLCPP_INFO(rclcpp::get_logger("mcmpc"),
             "target copied: x=%f y=%f z=%f yaw=%f",
             target_host.x, target_host.y, target_host.z, target_yaw);
@@ -604,6 +614,7 @@ int main(int argc, char *argv[])
     auto node = rclcpp::Node::make_shared("quadcopter_mcmpc");
     node->declare_parameter<std::string>("waypoints_file", "");
     node->declare_parameter<double>("waypoint_threshold", -1.0);
+    node->declare_parameter<bool>("wall_collision_model", false);
     try {
         const std::string waypoint_file = node->get_parameter("waypoints_file").as_string();
         runtime_waypoint_config = waypoint_file.empty()
@@ -621,9 +632,28 @@ int main(int argc, char *argv[])
     square_waypoint_count = runtime_waypoint_config.count;
     square_waypoint_threshold = runtime_waypoint_config.threshold;
     qc_mcmpc::mcmpc_controller::get_instance();
-    cudaMemcpyToSymbol(qc_mcmpc::square_waypoints_device, runtime_waypoint_config.points.data(), sizeof(runtime_waypoint_config.points));
-    cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_count_device, &square_waypoint_count, sizeof(int));
-    cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_threshold_device, &square_waypoint_threshold, sizeof(float));
+#ifdef PREDICTABLE_COLLISION_WITH_WALL
+    const int prediction_wall_collision_enabled =
+        node->get_parameter("wall_collision_model").as_bool() ? 1 : 0;
+    cudaMemcpyToSymbol(
+        qc_mcmpc::prediction_wall_collision_enabled_device,
+        &prediction_wall_collision_enabled,
+        sizeof(prediction_wall_collision_enabled));
+    RCLCPP_INFO(
+        node->get_logger(),
+        "MPC wall collision model: %s",
+        prediction_wall_collision_enabled ? "enabled" : "disabled");
+#endif
+    const cudaError_t waypoint_upload_error = qc_mcmpc::upload_waypoint_config_device(
+        reinterpret_cast<const float (*)[3]>(runtime_waypoint_config.points.data()),
+        square_waypoint_count,
+        square_waypoint_threshold);
+    if (waypoint_upload_error != cudaSuccess) {
+        RCLCPP_FATAL(node->get_logger(), "failed to upload GPU waypoints: %s",
+            cudaGetErrorString(waypoint_upload_error));
+        rclcpp::shutdown();
+        return 1;
+    }
     RCLCPP_INFO(node->get_logger(), "loaded %d runtime waypoints, threshold=%.3f m", square_waypoint_count, square_waypoint_threshold);
     auto qos  = rclcpp::QoS(10).reliability(rclcpp::ReliabilityPolicy::BestEffort);
     auto attitude_thrust_pub = node->create_publisher<px4_msgs::msg::VehicleAttitudeSetpoint>("/fmu/in/vehicle_attitude_setpoint", qos);
@@ -902,9 +932,13 @@ int main(int argc, char *argv[])
             }
 
             // MPC計算はMCMPC中だけ実行する
-            cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_index_device, &square_waypoint_index, sizeof(int));
-            cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_change_time_device, &square_waypoint_change_time, sizeof(float));
-            cudaMemcpyToSymbol(qc_mcmpc::mcmpc_log_device, &mcmpc_log, sizeof(float));
+            const cudaError_t progress_error = qc_mcmpc::update_waypoint_progress_device(
+                square_waypoint_index, square_waypoint_change_time, mcmpc_log);
+            if (progress_error != cudaSuccess) {
+                RCLCPP_ERROR_THROTTLE(node->get_logger(), *node->get_clock(), 1000,
+                    "failed to refresh GPU waypoint state: %s",
+                    cudaGetErrorString(progress_error));
+            }
             quad_sim_base::do_simulation(quad_sim_base::var_array_to_integrate);
         }
         

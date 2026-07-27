@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -127,22 +128,10 @@ void set_square_waypoint(int index, float sim_time)
     qc_mcmpc::target_host.wy = 0.0f;
     qc_mcmpc::target_host.wz = 0.0f;
     set_target_yaw(0.0f);
-    qc_mcmpc::update_target_state_device();
-    check_cuda(
-        cudaMemcpyToSymbol(
-            qc_mcmpc::square_waypoint_index_device,
-            &square_waypoint_index,
-            sizeof(int)),
-        "copy square_waypoint_index_device");
-    check_cuda(
-        cudaMemcpyToSymbol(
-            qc_mcmpc::square_waypoint_change_time_device,
-            &square_waypoint_change_time,
-            sizeof(float)),
-        "copy square_waypoint_change_time_device");
-    check_cuda(
-        cudaMemcpyToSymbol(qc_mcmpc::mcmpc_log_device, &mcmpc_log, sizeof(float)),
-        "copy mcmpc_log_device");
+    check_cuda(qc_mcmpc::update_target_state_device(), "copy target_state_device");
+    check_cuda(qc_mcmpc::update_waypoint_progress_device(
+        square_waypoint_index, square_waypoint_change_time, mcmpc_log),
+        "copy waypoint progress");
 }
 
 void reset_model_context()
@@ -301,9 +290,10 @@ int main(int argc, char** argv)
     }
     square_waypoint_count = waypoint_config.count;
     square_waypoint_threshold = waypoint_config.threshold;
-    check_cuda(cudaMemcpyToSymbol(qc_mcmpc::square_waypoints_device, waypoint_config.points.data(), sizeof(waypoint_config.points)), "copy runtime waypoints");
-    check_cuda(cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_count_device, &square_waypoint_count, sizeof(int)), "copy runtime waypoint count");
-    check_cuda(cudaMemcpyToSymbol(qc_mcmpc::square_waypoint_threshold_device, &square_waypoint_threshold, sizeof(float)), "copy runtime waypoint threshold");
+    check_cuda(qc_mcmpc::upload_waypoint_config_device(
+        reinterpret_cast<const float (*)[3]>(waypoint_config.points.data()),
+        square_waypoint_count,
+        square_waypoint_threshold), "copy runtime waypoint configuration");
 #ifdef PREDICTABLE_COLLISION_WITH_WALL
     const int prediction_wall_collision_enabled =
         options.prediction_wall_collision ? 1 : 0;
@@ -361,6 +351,8 @@ int main(int argc, char** argv)
     out << "\n  ],\n"
         << "  \"samples\":[\n";
 
+    double controller_compute_seconds = 0.0;
+
     for (int step = 0; step < options.steps; step++) {
         const float dx = qc_mcmpc::target_host.x - state[kStateX];
         const float dy = qc_mcmpc::target_host.y - state[kStateX + 1];
@@ -370,20 +362,22 @@ int main(int argc, char** argv)
             set_square_waypoint(square_waypoint_index + 1, mcmpc_log);
         }
 
-        check_cuda(
-            cudaMemcpyToSymbol(qc_mcmpc::mcmpc_log_device, &mcmpc_log, sizeof(float)),
+        check_cuda(qc_mcmpc::update_mcmpc_log_device(mcmpc_log),
             "copy mcmpc_log_device");
 
         double input_x = 0.0;
         double input_y = 0.0;
         double input_z = 0.0;
         double input_yaw = 0.0;
+        const auto controller_start = std::chrono::steady_clock::now();
         const float cost = controller.calc_optimal_input(
             state,
             input_x,
             input_y,
             input_z,
             input_yaw);
+        controller_compute_seconds += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - controller_start).count();
 
         qc_mcmpc::input_array best_input;
         controller.copy_best_input_array(best_input);
@@ -453,5 +447,10 @@ int main(int argc, char** argv)
 
     out << "\n  ]\n}\n";
     std::cout << "wrote " << options.output << std::endl;
+    std::cout << "controller mean: "
+              << controller_compute_seconds * 1000.0 / options.steps
+              << " ms ("
+              << options.steps / controller_compute_seconds
+              << " Hz)" << std::endl;
     return 0;
 }

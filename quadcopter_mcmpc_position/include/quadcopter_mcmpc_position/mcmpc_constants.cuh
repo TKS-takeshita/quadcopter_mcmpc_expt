@@ -188,7 +188,20 @@ namespace qc_mcmpc{
 
     __global__ void simulate_best_input_trajectory_kernel(input_array best_input);
 
-    extern void update_target_state_device();
+    // These host APIs are implemented in the same CUDA translation unit that
+    // owns the device symbols.  Callers linked through mcmpc_core must not use
+    // cudaMemcpyToSymbol on those symbols directly: CUDA device symbols are not
+    // reliably addressable across a shared-library boundary.
+    extern cudaError_t update_target_state_device();
+    extern cudaError_t upload_waypoint_config_device(
+        const float waypoints[_SQUARE_WAYPOINTS][3],
+        int count,
+        float threshold);
+    extern cudaError_t update_waypoint_progress_device(
+        int index,
+        float change_time,
+        float log_time);
+    extern cudaError_t update_mcmpc_log_device(float log_time);
 
     static float prev_velocity_host[3] = {0.0f, 0.0f, 0.0f};
     static float prev_acceleration_host[3] = {0.0f, 0.0f, 0.0f};

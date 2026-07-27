@@ -5,7 +5,9 @@
 
 //#define UNPREDICTABLE_IMPULSE
 //#define UNPREDICTABLE_COLLISION_WITH_WALL
+#ifndef MCMPC_DISABLE_WALL_MODEL
 #define PREDICTABLE_COLLISION_WITH_WALL
+#endif
 //#define MCMPC_WITH_FORCE_STATE
 
 //#define SIMULATION
@@ -27,7 +29,7 @@
 #define _SQUARE_WAYPOINTS               32 // runtime-configurable maximum
 #define _SQUARE_WAYPOINT_THRESHOLD      0.05f // fallback default
 #define _SQUARE_WAYPOINT_HOLD_SEC       0.0f
-#define _WAYPOINT_CRUISE_SPEED           0.30f // m/s, zero only at the final waypoint
+#define _WAYPOINT_CRUISE_SPEED          0.50f // m/s, zero only at the final waypoint
 #define _GUARD_ARC_ANGLE_RAD              (92.1f * _PI_FROAT / 180.0f)
 
 // cost for MPC
