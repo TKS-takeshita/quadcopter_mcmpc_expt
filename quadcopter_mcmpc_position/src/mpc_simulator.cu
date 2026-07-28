@@ -418,6 +418,11 @@ namespace qc_mcmpc
         float att_setpoint[4];
         float thrust_setpoint[3];
         float omega_setpoint[3];
+        const float target_yaw = atan2f(
+            2.0f * (target_state_device.e0 * target_state_device.e3 +
+                    target_state_device.e1 * target_state_device.e2),
+            1.0f - 2.0f * (target_state_device.e2 * target_state_device.e2 +
+                           target_state_device.e3 * target_state_device.e3));
 
         // Project the current position onto the active path segment.  The scalar
         // progress on that segment is carried forward as a prediction state.
@@ -1151,6 +1156,9 @@ namespace qc_mcmpc
 #endif
 
             float input_delta_cost = 0.0f;
+            const float yaw_setpoint_error = atan2f(
+                sinf(decoupled_position[i][yaw] - target_yaw),
+                cosf(decoupled_position[i][yaw] - target_yaw));
             if (i > 0) {
                 float du_x = decoupled_position[i][x] - decoupled_position[i - 1][x];
                 float du_y = decoupled_position[i][y] - decoupled_position[i - 1][y];
@@ -1171,25 +1179,41 @@ namespace qc_mcmpc
                  +  _COST_R_X*(decoupled_position[i][x]-cost_target_x)*(decoupled_position[i][x]-cost_target_x)
                  +  _COST_R_Y*(decoupled_position[i][y]-cost_target_y)*(decoupled_position[i][y]-cost_target_y)
                  +  _COST_R_Z*(decoupled_position[i][z]-cost_target_z)*(decoupled_position[i][z]-cost_target_z)
-                 +  _COST_R_YAW*(decoupled_position[i][yaw])*(decoupled_position[i][yaw])
+                 +  _COST_R_YAW*yaw_setpoint_error*yaw_setpoint_error
                  +  input_delta_cost
                  +  collision_mission_cost
             );
 
             if (i == _DEVICE_CONST_HORIZON - 1) {
-                float terminal_pos_x = var_and_z_i_temp[7] - cost_target_x;
-                float terminal_pos_y = var_and_z_i_temp[8] - cost_target_y;
-                float terminal_pos_z = var_and_z_i_temp[9] - cost_target_z;
-                float terminal_vel_x = var_and_z_i_temp[10] - waypoint_velocity_ref[0];
-                float terminal_vel_y = var_and_z_i_temp[11] - waypoint_velocity_ref[1];
-                float terminal_vel_z = var_and_z_i_temp[12] - waypoint_velocity_ref[2];
+                // The running reference is a cruise-speed path preview and can
+                // already point at the following segment.  Using it for the
+                // terminal cost makes the prediction deliberately pass through
+                // (rather than converge to) the active logged target.  The
+                // terminal equilibrium must instead be the active waypoint with
+                // zero velocity.
+                float terminal_pos_x = var_and_z_i_temp[7] - target_state_device.x;
+                float terminal_pos_y = var_and_z_i_temp[8] - target_state_device.y;
+                float terminal_pos_z = var_and_z_i_temp[9] - target_state_device.z;
+                float terminal_vel_x = var_and_z_i_temp[10];
+                float terminal_vel_y = var_and_z_i_temp[11];
+                float terminal_vel_z = var_and_z_i_temp[12];
+                const float terminal_u_x = decoupled_position[i][x] - target_state_device.x;
+                const float terminal_u_y = decoupled_position[i][y] - target_state_device.y;
+                const float terminal_u_z = decoupled_position[i][z] - target_state_device.z;
+                const float terminal_u_yaw = atan2f(
+                    sinf(decoupled_position[i][yaw] - target_yaw),
+                    cosf(decoupled_position[i][yaw] - target_yaw));
                 cost +=
                     _COST_TERMINAL_X * terminal_pos_x * terminal_pos_x +
                     _COST_TERMINAL_Y * terminal_pos_y * terminal_pos_y +
                     _COST_TERMINAL_Z * terminal_pos_z * terminal_pos_z +
                     _COST_TERMINAL_VX * terminal_vel_x * terminal_vel_x +
                     _COST_TERMINAL_VY * terminal_vel_y * terminal_vel_y +
-                    _COST_TERMINAL_VZ * terminal_vel_z * terminal_vel_z;
+                    _COST_TERMINAL_VZ * terminal_vel_z * terminal_vel_z +
+                    _COST_TERMINAL_U_X * terminal_u_x * terminal_u_x +
+                    _COST_TERMINAL_U_Y * terminal_u_y * terminal_u_y +
+                    _COST_TERMINAL_U_Z * terminal_u_z * terminal_u_z +
+                    _COST_TERMINAL_U_YAW * terminal_u_yaw * terminal_u_yaw;
             }
 
             // prev_acc は加速度setpointではなく，速度微分LPF状態として次ステップへ引き継ぐ

@@ -50,16 +50,26 @@
 #define _COST_R_Y 	    0.25f
 #define _COST_R_Z 	    0.50f
 #define _COST_R_YAW 	0.05f
-#define _COST_TERMINAL_X 	80.0f
-#define _COST_TERMINAL_Y 	80.0f
-#define _COST_TERMINAL_Z 	100.0f
-#define _COST_TERMINAL_VX 	25.0f
-#define _COST_TERMINAL_VY 	25.0f
-#define _COST_TERMINAL_VZ 	30.0f
+#define _COST_TERMINAL_X 	120.0f
+#define _COST_TERMINAL_Y 	120.0f
+#define _COST_TERMINAL_Z 	140.0f
+#define _COST_TERMINAL_VX 	40.0f
+#define _COST_TERMINAL_VY 	40.0f
+#define _COST_TERMINAL_VZ 	50.0f
+// A zero move penalty lets the independently sampled horizon points chatter.
+// Keep it large enough to make the position-setpoint sequence executable by
+// the cascaded PX4 controller, while leaving the stage tracking term dominant.
 #define _COST_DU_X 		2.0f
 #define _COST_DU_Y 		2.0f
 #define _COST_DU_Z 		4.0f
 #define _COST_DU_YAW 	0.25f
+// The stage reference moves along the waypoint path.  Anchor the last
+// position-setpoint explicitly to the active waypoint as well as anchoring the
+// predicted vehicle state there.
+#define _COST_TERMINAL_U_X 	40.0f
+#define _COST_TERMINAL_U_Y 	40.0f
+#define _COST_TERMINAL_U_Z 	60.0f
+#define _COST_TERMINAL_U_YAW 2.0f
 #define _COST_CONTACT_POSITION  1.0f
 #define _COST_CONTACT_VELOCITY  0.5f
 #define _COST_EXIT_DIRECTION    2.0f

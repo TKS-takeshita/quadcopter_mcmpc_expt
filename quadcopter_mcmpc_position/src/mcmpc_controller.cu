@@ -514,7 +514,9 @@ namespace qc_mcmpc
                 weighted_sum * inv_weight_sum;
         }
         if (tid == 0) {
-            best_input->cost = 0.0f;
+            // Preserve an actual optimizer diagnostic.  Setting this to zero
+            // made calc_optimal_input() and every logged cost uninformative.
+            best_input->cost = costs[top_indices[0]];
         }
     }
 
