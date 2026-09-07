@@ -591,7 +591,7 @@ namespace quad_sim_base
 
 void odometry_callback(const px4_msgs::msg::VehicleOdometry::SharedPtr msg) {
     std::lock_guard<std::mutex> lock(quad_sim_base::odom_mutex);
-    
+
     quad_sim_base::latest_odom = msg;
 
     current_x = msg->position[0];
@@ -714,6 +714,10 @@ int main(int argc, char *argv[])
     csv << ",model_acc_bias_x,model_acc_bias_y,model_acc_bias_z";
     csv << ",model_acc_nominal_x,model_acc_nominal_y,model_acc_nominal_z";
     csv << ",model_acc_measured_x,model_acc_measured_y,model_acc_measured_z";
+    csv << ",waypoint_index,waypoint_change_time";
+    csv << ",target_state_e0,target_state_e1,target_state_e2,target_state_e3,target_state_wx,target_state_wy,target_state_wz,target_state_x,target_state_y,target_state_z,target_state_vx,target_state_vy,target_state_vz";
+    csv << ",replay_prev_acc_x,replay_prev_acc_y,replay_prev_acc_z";
+    for (int h=0; h<_DEVICE_CONST_HORIZON; ++h) for (int j=0; j<_N_OF_ODES; ++j) csv << ",pred" << h << "_s" << j;
 
     csv << "\n";
     rclcpp::Rate rate(50);
@@ -1139,6 +1143,23 @@ int main(int argc, char *argv[])
                     << "," << measured_acc_host_for_model[1]
                     << "," << measured_acc_host_for_model[2];
             }
+
+            // Snapshot the exact deterministic rollout and controller state used
+            // by the CUDA model.  These copies are made only while logging.
+            float replay_pred[_DEVICE_CONST_HORIZON][_N_OF_ODES];
+            cudaMemcpyFromSymbol(replay_pred, qc_mcmpc::deterministic_sim_trajectory_device,
+                                 sizeof(replay_pred));
+            float replay_prev_acc[3];
+            cudaMemcpyFromSymbol(replay_prev_acc, qc_mcmpc::prev_acceleration_device,
+                                 sizeof(replay_prev_acc));
+            csv << "," << square_waypoint_index << "," << square_waypoint_change_time;
+            csv << "," << target_host.e0 << "," << target_host.e1 << "," << target_host.e2 << "," << target_host.e3
+                << "," << target_host.wx << "," << target_host.wy << "," << target_host.wz
+                << "," << target_host.x << "," << target_host.y << "," << target_host.z
+                << "," << target_host.xp << "," << target_host.yp << "," << target_host.zp;
+            csv << "," << replay_prev_acc[0] << "," << replay_prev_acc[1] << "," << replay_prev_acc[2];
+            for (int h=0; h<_DEVICE_CONST_HORIZON; ++h)
+                for (int j=0; j<_N_OF_ODES; ++j) csv << "," << replay_pred[h][j];
 
             csv << "\n";
             mcmpc_log +=0.02;

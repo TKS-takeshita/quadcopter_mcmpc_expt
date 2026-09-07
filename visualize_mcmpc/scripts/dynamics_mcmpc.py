@@ -47,7 +47,7 @@ if not _mpl_config_dir or not os.access(_mpl_config_dir, os.W_OK):
 warnings.filterwarnings("ignore", message="Unable to import Axes3D.*", category=UserWarning, )
 import matplotlib.pyplot as plt
 
-DEFAULT_CSV = "/home/kt182/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_20260728_060711.csv"
+DEFAULT_CSV = "/home/ros2/ws_mcmpc/src/quadcopter_mcmpc_expt/quadcopter_mcmpc_position/csv/mcmpc_log_20260730_064053.csv"
 
 SIMULATION = False
 MODE_MODEL_INPUT = "model_prediction"
@@ -1113,7 +1113,15 @@ def make_input_from_setpoint(row, state, context, dt, horizon_step=None, use_log
     if "prev_omega" not in context:
         context["prev_omega"] = omega.copy()
     if "prev_omega_dot" not in context:
-        context["prev_omega_dot"] = np.zeros(3, dtype=float)
+        # Match quad_mcmpc_position: angular_accel_for_model from the current
+        # measured cycle is copied to prev_angular_acceleration_device before
+        # the model call.
+        logged_omega_dot = log_vector_from_row(
+            row, ("angular_accel_x", "angular_accel_y", "angular_accel_z")
+        )
+        context["prev_omega_dot"] = (
+            logged_omega_dot.copy() if logged_omega_dot is not None else np.zeros(3, dtype=float)
+        )
     if "rate_int" not in context:
         logged_rate_int = logged_rate_int_from_row(row)
         context["rate_int"] = (
